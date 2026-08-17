@@ -90,7 +90,7 @@ touch_optional "$SECRETS_DIR/ai-provider-api-key"
 if [ ! -s "$SECRETS_DIR/admin-password-hash" ]; then
   : > "$SECRETS_DIR/admin-password-hash"
   chmod 600 "$SECRETS_DIR/admin-password-hash" 2>/dev/null || true
-  info "admin-password-hash 将由 api 镜像在启动前自动生成（默认密码：$DEFAULT_ADMIN_PASSWORD）"
+  info "admin-password-hash 将由 api 镜像在启动前自动生成（默认密码：${DEFAULT_ADMIN_PASSWORD}）"
 else
   ok "admin-password-hash 已存在（跳过生成）"
 fi

@@ -344,7 +344,7 @@ done
 
 if [ "$need_init" = "1" ]; then
   info "首次启动，运行初始化向导..."
-  sh ./scripts/setup-wizard.sh
+  sh ./scripts/setup-wizard.sh || die "初始化失败"
 fi
 
 # ---------- 3. 加载 .env（用于读取 WEB_PORT 等变量） ----------
