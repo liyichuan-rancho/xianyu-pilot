@@ -1,4 +1,5 @@
 import datetime as dt
+import hashlib
 import json
 import logging
 import re
@@ -53,6 +54,9 @@ TOKEN_PATTERN = re.compile(r"[\w\u4e00-\u9fff]{2,}")
 # matches goods like "庄园领主终极版Steam激活码" that a single
 # LIKE '%庄园领主steam%' would miss (the CJK and Latin are not contiguous there).
 SEARCH_KEYWORD_PATTERN = re.compile(r"[\u4e00-\u9fff]{2,}|[a-zA-Z]{2,}|[0-9]{2,}")
+EXTERNAL_SOURCE_SYSTEM = "xianyu-product-management"
+EXTERNAL_SOURCE_KEY_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,191}")
+EXTERNAL_GOODS_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,200}")
 
 TEMPLATE_VARIABLES = [
     {"key": "{买家昵称}", "desc": "买家在闲鱼中的显示名称"},
@@ -297,6 +301,11 @@ def _source_record(row: dict[str, Any], usage_count: int) -> dict[str, Any]:
         "usageCount": usage_count,
         "stockLabel": _build_source_stock_label(row, delivery_mode),
         "segments": _parse_segments_from_row(row.get("segments")),
+        "externalSystem": row.get("external_system") or "",
+        "externalKey": row.get("external_key") or "",
+        "externalAccountId": row.get("external_account_id"),
+        "externalGoodsId": row.get("external_goods_id") or "",
+        "contentSha256": row.get("content_sha256") or "",
         "createdTime": _format_datetime(row.get("created_time")),
         "updatedTime": _format_datetime(row.get("updated_time")),
     }
@@ -938,7 +947,8 @@ async def _load_delivery_source_row(
                 f"""
                 SELECT s.id, s.title, s.content, s.remark,
                        s.source_type, s.delivery_mode, s.card_group_id,
-                       s.segments,
+                       s.segments, s.external_system, s.external_key,
+                       s.external_account_id, s.external_goods_id, s.content_sha256,
                        s.created_time, s.updated_time,
                        g.group_name AS card_group_name,
                        g.available_count AS card_remain_count
@@ -2776,7 +2786,8 @@ async def get_delivery_sources(
                 f"""
                 SELECT s.id, s.title, s.content, s.remark,
                        s.source_type, s.delivery_mode, s.card_group_id,
-                       s.segments,
+                       s.segments, s.external_system, s.external_key,
+                       s.external_account_id, s.external_goods_id, s.content_sha256,
                        s.created_time, s.updated_time,
                        g.group_name AS card_group_name,
                        g.available_count AS card_remain_count
@@ -2801,6 +2812,191 @@ async def get_delivery_sources(
     return ResultObject.success(_page_payload(records, _to_int(total), safe_current, safe_size))
 
 
+@router.post(
+    "/integrations/xianyu-product-management/delivery-sources/sync",
+    response_model=ResultObject,
+)
+async def sync_external_delivery_source(
+    body: dict[str, Any] = Body(default_factory=dict),
+    db: AsyncSession = Depends(get_db),
+    _: dict = Depends(get_current_user),
+):
+    """Idempotently upsert and bind a text source owned by 鱼料台.
+
+    This is deliberately one transactional API instead of a create-then-list
+    client workflow: a network retry can never create a duplicate source or
+    leave a source unbound after the pipeline reported success.
+    """
+
+    raw_account_id = body.get("accountId")
+    if isinstance(raw_account_id, bool):
+        return ResultObject.validate_failed("accountId 必须是正整数")
+    try:
+        account_id = int(raw_account_id)
+    except (TypeError, ValueError):
+        return ResultObject.validate_failed("accountId 必须是正整数")
+    if account_id <= 0:
+        return ResultObject.validate_failed("accountId 必须是正整数")
+
+    source_key = str(body.get("sourceKey") or "").strip()
+    if not EXTERNAL_SOURCE_KEY_PATTERN.fullmatch(source_key):
+        return ResultObject.validate_failed("sourceKey 格式无效")
+    external_goods_id = str(body.get("externalGoodsId") or "").strip()
+    if not EXTERNAL_GOODS_ID_PATTERN.fullmatch(external_goods_id):
+        return ResultObject.validate_failed("externalGoodsId 格式无效")
+
+    title = str(body.get("title") or "").strip()
+    if len(title) > 200:
+        return ResultObject.validate_failed("货源标题不能超过 200 字")
+    content = str(body.get("content") or "").strip()
+    if not content:
+        return ResultObject.validate_failed("发货正文不能为空")
+    if len(content) > 10_000:
+        return ResultObject.validate_failed("发货正文不能超过 10000 字")
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    supplied_digest = str(body.get("contentSha256") or "").strip().lower()
+    if supplied_digest and supplied_digest != digest:
+        return ResultObject.validate_failed("contentSha256 与发货正文不匹配")
+
+    goods_rows = (
+        await db.execute(
+            text(
+                f"""
+                SELECT g.id, g.account_id, g.external_goods_id, g.goods_id, g.title
+                FROM xianyu_goods g
+                WHERE g.deleted = 0
+                  AND {VALID_ACCOUNT_FILTER}
+                  AND g.account_id = :account_id
+                  AND (g.external_goods_id = :external_goods_id OR g.goods_id = :external_goods_id)
+                ORDER BY CASE WHEN g.external_goods_id = :external_goods_id THEN 0 ELSE 1 END,
+                         g.id DESC
+                LIMIT 2
+                """
+            ),
+            {"account_id": account_id, "external_goods_id": external_goods_id},
+        )
+    ).mappings().all()
+    if not goods_rows:
+        return ResultObject.failed(
+            "xianyu-pilot 中未找到该账号下的闲鱼商品，请先同步商品列表",
+            code=404,
+        )
+    goods = dict(goods_rows[0])
+
+    existing = (
+        await db.execute(
+            text(
+                """
+                SELECT id, external_account_id, external_goods_id
+                FROM delivery_text_source
+                WHERE external_system = :external_system
+                  AND external_key = :external_key
+                LIMIT 1
+                FOR UPDATE
+                """
+            ),
+            {
+                "external_system": EXTERNAL_SOURCE_SYSTEM,
+                "external_key": source_key,
+            },
+        )
+    ).mappings().first()
+    if existing and (
+        _to_int(existing.get("external_account_id")) != account_id
+        or str(existing.get("external_goods_id") or "") != external_goods_id
+    ):
+        await db.rollback()
+        return ResultObject.failed("sourceKey 已绑定其他闲鱼商品", code=409)
+
+    source_title = title or str(goods.get("title") or "").strip() or f"商品 {external_goods_id}"
+    remark = str(body.get("remark") or "").strip()
+    if len(remark) > 2_000:
+        return ResultObject.validate_failed("货源备注不能超过 2000 字")
+    if not remark:
+        remark = "由鱼料台流水线自动同步；正文更新请在鱼料台重新执行“同步发货文案”"
+
+    await db.execute(
+        text(
+            """
+            INSERT INTO delivery_text_source(
+                title, content, remark, source_type, delivery_mode, card_group_id, segments,
+                external_system, external_key, external_account_id, external_goods_id,
+                content_sha256, deleted, created_time, updated_time
+            )
+            VALUES(
+                :title, :content, :remark, 'text', 'text', NULL, NULL,
+                :external_system, :external_key, :external_account_id, :external_goods_id,
+                :content_sha256, 0, NOW(), NOW()
+            )
+            ON DUPLICATE KEY UPDATE
+                id = LAST_INSERT_ID(id),
+                title = VALUES(title),
+                content = VALUES(content),
+                remark = VALUES(remark),
+                source_type = 'text',
+                delivery_mode = 'text',
+                card_group_id = NULL,
+                segments = NULL,
+                external_account_id = VALUES(external_account_id),
+                external_goods_id = VALUES(external_goods_id),
+                content_sha256 = VALUES(content_sha256),
+                deleted = 0,
+                updated_time = NOW()
+            """
+        ),
+        {
+            "title": source_title[:200],
+            "content": content,
+            "remark": remark,
+            "external_system": EXTERNAL_SOURCE_SYSTEM,
+            "external_key": source_key,
+            "external_account_id": account_id,
+            "external_goods_id": external_goods_id,
+            "content_sha256": digest,
+        },
+    )
+    source_id = _to_int((await db.execute(text("SELECT LAST_INSERT_ID()"))).scalar())
+    if source_id <= 0 and existing:
+        source_id = _to_int(existing.get("id"))
+    if source_id <= 0:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="货源同步后未取得货源 ID")
+
+    enabled = _truthy(body.get("enabled", True))
+    auto_confirm_shipment = _truthy(body.get("autoConfirmShipment", True))
+    goods_id = _to_int(goods.get("id"))
+    config = await _load_goods_config(db, goods_id)
+    timing_config = dict(config.get("payDelivery") or {})
+    timing_config.update(
+        {
+            "enabled": 1 if enabled else 0,
+            "mode": "text",
+            "sourceId": source_id,
+            "sourceTitle": source_title[:200],
+            "content": content,
+            "autoConfirmShipment": auto_confirm_shipment,
+        }
+    )
+    timing_config.pop("cardGroupId", None)
+    config["accountId"] = account_id
+    config["payDelivery"] = timing_config
+    await _upsert_goods_config(db, goods_id, config)
+    await db.commit()
+
+    return ResultObject.success(
+        {
+            "sourceId": source_id,
+            "goodsId": goods_id,
+            "externalGoodsId": external_goods_id,
+            "contentSha256": digest,
+            "enabled": enabled,
+            "autoConfirmShipment": auto_confirm_shipment,
+            "timing": "payDelivery",
+        },
+        "发货文案已同步到货源库并绑定商品",
+    )
+
+
 @router.get("/auto-delivery/sources/{source_id}", response_model=ResultObject)
 async def get_delivery_source_detail(
     source_id: int,
@@ -2811,7 +3007,10 @@ async def get_delivery_source_detail(
         await db.execute(
             text(
                 """
-                SELECT id, title, content, remark, segments, created_time, updated_time
+                SELECT id, title, content, remark, segments,
+                       external_system, external_key, external_account_id,
+                       external_goods_id, content_sha256,
+                       created_time, updated_time
                 FROM delivery_text_source
                 WHERE id = :source_id
                   AND deleted = 0

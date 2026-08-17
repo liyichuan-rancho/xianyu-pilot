@@ -16,6 +16,15 @@ set -u
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$PROJECT_DIR"
 
+# Homebrew 的 node@22 是 keg-only；若已安装则让初始化及所有本地服务统一使用它。
+if command -v brew >/dev/null 2>&1; then
+  NODE22_PREFIX=$(brew --prefix node@22 2>/dev/null || true)
+  if [ -n "$NODE22_PREFIX" ] && [ -x "$NODE22_PREFIX/bin/node" ]; then
+    PATH="$NODE22_PREFIX/bin:$PATH"
+    export PATH
+  fi
+fi
+
 VENV_PY="$PROJECT_DIR/.venv/bin/python"
 API_DIR="$PROJECT_DIR/apps/api"
 CRAWLER_DIR="$PROJECT_DIR/apps/crawler"
@@ -40,16 +49,18 @@ for arg in "$@"; do
   case "$arg" in
     --force-init) FORCE_INIT=1 ;;
     --no-init)    SKIP_INIT=1 ;;
-    *) echo "未知参数：$arg（支持：--force-init / --no-init）" >&2; exit 1 ;;
+    *) echo "未知参数：${arg}（支持：--force-init / --no-init）" >&2; exit 1 ;;
   esac
 done
 
 check_port_free() {
   port=$1
-  if command -v ss >/dev/null 2>&1; then
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -q LISTEN && return 1
+  elif command -v ss >/dev/null 2>&1; then
     ss -tlnp 2>/dev/null | grep -q ":${port} " && return 1
   elif command -v netstat >/dev/null 2>&1; then
-    netstat -tlnp 2>/dev/null | grep -q ":${port} " && return 1
+    netstat -an 2>/dev/null | grep -Eq "(\.|:)${port}[[:space:]].*LISTEN" && return 1
   fi
   return 0
 }
@@ -70,7 +81,7 @@ wait_http() {
     sleep 1
     i=$((i + 1))
   done
-  warn "$name 在 ${timeout_sec}s 内未就绪（$url）"
+  warn "$name 在 ${timeout_sec}s 内未就绪（${url}）"
   return 1
 }
 
@@ -106,7 +117,7 @@ for p in $WEB_PORT $API_PORT $CRAWLER_PORT; do
     die "端口 $p 已被占用。请先停止占用进程，或修改 .env 中的端口（SERVER_PORT/CRAWLER_PORT/XYA_WEB_PORT）"
   fi
 done
-ok "端口检查通过（Web=$WEB_PORT, API=$API_PORT, Crawler=$CRAWLER_PORT）"
+ok "端口检查通过（Web=$WEB_PORT, API=$API_PORT, Crawler=${CRAWLER_PORT}）"
 
 mkdir -p "$PID_DIR"
 
@@ -166,7 +177,7 @@ start_service() {
   )
   sleep 1
   if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
-    ok "$name 已启动（PID $(cat "$pidfile")，日志：$stdout）"
+    ok "$name 已启动（PID $(cat "$pidfile")，日志：${stdout}）"
   else
     warn "$name 启动失败，最近日志："
     tail -20 "$stderr" 2>/dev/null | sed 's/^/    /'

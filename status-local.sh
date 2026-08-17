@@ -14,10 +14,12 @@ WEB_PORT=15176
 
 check_port() {
   port=$1
-  if command -v ss >/dev/null 2>&1; then
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -q LISTEN && return 0
+  elif command -v ss >/dev/null 2>&1; then
     ss -tlnp 2>/dev/null | grep -q ":${port} " && return 0
   elif command -v netstat >/dev/null 2>&1; then
-    netstat -tlnp 2>/dev/null | grep -q ":${port} " && return 0
+    netstat -an 2>/dev/null | grep -Eq "(\.|:)${port}[[:space:]].*LISTEN" && return 0
   fi
   return 1
 }

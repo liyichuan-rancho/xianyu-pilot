@@ -75,6 +75,7 @@
 - 🧾 **订单管理** — 同步、跟踪、状态流转、会话侧客户订单卡片、小刀订单免拼发货
 - 💬 **在线消息** — 实时会话、WebSocket 长连接、分页回溯、会话级自动回复开关
 - 🚚 **自动发货** — 卡密自动交付、实时与手动双通道、补发兜底循环、发货确认语句会话（买家回复确认后才触发）
+- 🔄 **外部货源同步** — 为鱼料台提供带管理员鉴权的幂等接口，原子更新文本货源、商品绑定和付款后自动发货配置
 - 🎫 **卡密仓库** — 库存管理、去重、交付记录
 - 🤖 **AI 自动回复** — AI 驱动、RAG 知识库增强、人设与聊天规则可配
 - ⏰ **定时任务** — 调度执行、心跳与租约保护
@@ -249,6 +250,12 @@ Windows 使用 `.\start.bat`，参数相同。
 镜像源与命名空间可在 `.env` 的 `Prebuilt Docker images` 段覆盖；要切回本地源码构建用 `--build` 参数。
 
 > Compose 会先运行一次性 `migrate` 服务，再允许 API 和 Worker 启动；新库与旧库都走同一个带历史记录和 MySQL 单实例锁的版本化 runner。维护窗口、备份、状态检查和回滚兼容流程见 [`apps/api/migrations/README.md`](apps/api/migrations/README.md)。
+
+### 鱼料台货源同步接口
+
+`POST /api/integrations/xianyu-product-management/delivery-sources/sync` 使用与后台相同的管理员 Bearer 鉴权。调用方提供账号 ID、闲鱼商品 ID、稳定 `sourceKey`、标题、正文和可选 SHA-256 指纹；接口会在一个事务中幂等新增或更新文本货源、绑定已同步商品的 `payDelivery` 配置，并按请求开启自动发货与自动确认发货。商品必须先存在于 xianyu-pilot；正文为空、指纹不匹配、商品不存在或稳定键已属于其他商品时不会写入部分配置。
+
+升级本地源码部署时使用 `sh ./start.sh --build`，Compose 会自动执行 `046_external_delivery_source_sync.sql`。裸机开发先在 `apps/api` 目录执行 `python -m app.migrations upgrade`。
 
 ### 暴露到公网
 

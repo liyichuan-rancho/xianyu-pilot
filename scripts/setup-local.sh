@@ -50,6 +50,16 @@ set_env() {
 
 # ---------- 1. 前置依赖检查 ----------
 info "检查本地环境依赖..."
+
+# Homebrew 的版本化 Node 默认不会加入 PATH；本地开发优先使用项目要求的 Node 22。
+if command -v brew >/dev/null 2>&1; then
+  NODE22_PREFIX=$(brew --prefix node@22 2>/dev/null || true)
+  if [ -n "$NODE22_PREFIX" ] && [ -x "$NODE22_PREFIX/bin/node" ]; then
+    PATH="$NODE22_PREFIX/bin:$PATH"
+    export PATH
+  fi
+fi
+
 PYTHON_BIN=""
 for c in python3 python; do
   if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
@@ -61,10 +71,14 @@ done
 ok "Python：$($PYTHON_BIN --version 2>&1)"
 
 for c in node npm; do
-  command -v "$c" >/dev/null 2>&1 || die "未检测到 $c，请先安装 Node.js 22+：https://nodejs.org/ （apt: sudo apt install -y nodejs npm）"
+  command -v "$c" >/dev/null 2>&1 || die "未检测到 ${c}，请先安装 Node.js 22：https://nodejs.org/"
 done
-NODE_MAJOR=$(node -e 'console.log(process.versions.node.split(".")[0])' 2>/dev/null)
-[ "${NODE_MAJOR:-0}" -lt 18 ] && warn "检测到 Node.js v${NODE_MAJOR}，推荐 22+（最低 18）"
+NODE_COMPATIBLE=$(node -e '
+const [major, minor, patch] = process.versions.node.split(".").map(Number)
+process.stdout.write(String(major === 22 && (minor > 23 || (minor === 23 && patch >= 1))))
+' 2>/dev/null)
+[ "$NODE_COMPATIBLE" = "true" ] || die "Node.js 版本不兼容：$(node --version)。项目要求 >=22.23.1 <23（macOS 可运行 brew install node@22）"
+[ "$(npm --version 2>/dev/null)" = "10.9.8" ] || die "npm 版本不兼容：$(npm --version 2>/dev/null)。项目要求 10.9.8"
 ok "Node.js：$(node --version) / npm：$(npm --version)"
 
 command -v mysql >/dev/null 2>&1 || warn "未检测到 mysql 客户端，将无法自动创建数据库（可手动创建后重跑本脚本）"
@@ -106,7 +120,7 @@ CURRENT_HASH=$(grep -E '^ADMIN_PASSWORD_HASH=' "$ENV_FILE" 2>/dev/null | head -1
 if [ -n "$CURRENT_HASH" ] && echo "$CURRENT_HASH" | grep -qE '^\$2[aby]\$'; then
   ok "admin 密码 hash 已存在（跳过生成）"
 else
-  info "生成 admin 密码 hash（默认密码：$DEFAULT_ADMIN_PASSWORD，可用 ADMIN_PASSWORD 覆盖）..."
+  info "生成 admin 密码 hash（默认密码：${DEFAULT_ADMIN_PASSWORD}，可用 ADMIN_PASSWORD 覆盖）..."
   HASH_VALUE=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" "$VENV_DIR/bin/python" -c '
 import os, bcrypt
 pw = os.environ["ADMIN_PASSWORD"].encode("utf-8")
@@ -124,41 +138,60 @@ fi
 MYSQL_DATABASE=$(grep -E '^MYSQL_DATABASE=' "$ENV_FILE" | head -1 | cut -d= -f2-)
 MYSQL_USER=$(grep -E '^MYSQL_USER=' "$ENV_FILE" | head -1 | cut -d= -f2-)
 MYSQL_PASSWORD=$(grep -E '^MYSQL_PASSWORD=' "$ENV_FILE" | head -1 | cut -d= -f2-)
+MYSQL_HOST=$(grep -E '^MYSQL_HOST=' "$ENV_FILE" | head -1 | cut -d= -f2-)
+MYSQL_PORT=$(grep -E '^MYSQL_PORT=' "$ENV_FILE" | head -1 | cut -d= -f2-)
 [ -z "$MYSQL_DATABASE" ] && MYSQL_DATABASE="xianyu_opensource"
 [ -z "$MYSQL_USER" ] && MYSQL_USER="xianyu"
+[ -z "$MYSQL_HOST" ] && MYSQL_HOST="127.0.0.1"
+[ -z "$MYSQL_PORT" ] && MYSQL_PORT="3306"
 
 if command -v mysql >/dev/null 2>&1; then
-  # 尝试 root 连接：免密 → 环境变量 → 交互输入
-  ROOT_ARGS=""
-  if mysql -uroot --skip-password -e "SELECT 1" >/dev/null 2>&1; then
-    ROOT_ARGS="-uroot"
-  elif [ -n "${MYSQL_ROOT_PASSWORD:-}" ] && mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1" >/dev/null 2>&1; then
-    ROOT_ARGS="-uroot -p${MYSQL_ROOT_PASSWORD}"
+  # 尝试 root 连接：免密 → 环境变量/本地 root 配置 → 交互输入
+  ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-}"
+  if [ -z "$ROOT_PASSWORD" ] && [ "$MYSQL_USER" = "root" ]; then
+    ROOT_PASSWORD=$MYSQL_PASSWORD
+  fi
+
+  mysql_root() {
+    if [ -n "$ROOT_PASSWORD" ]; then
+      mysql --host="$MYSQL_HOST" --port="$MYSQL_PORT" --user=root --password="$ROOT_PASSWORD" "$@"
+    else
+      mysql --host="$MYSQL_HOST" --port="$MYSQL_PORT" --user=root --skip-password "$@"
+    fi
+  }
+
+  if mysql --host="$MYSQL_HOST" --port="$MYSQL_PORT" --user=root --skip-password -e "SELECT 1" >/dev/null 2>&1; then
+    ROOT_PASSWORD=""
+  elif [ -n "$ROOT_PASSWORD" ] && mysql_root -e "SELECT 1" >/dev/null 2>&1; then
+    :
   else
     printf '请输入 MySQL root 密码（本机 root 无密码则直接回车）: '
     stty -echo 2>/dev/null
     IFS= read -r ROOT_INPUT
     stty echo 2>/dev/null
     echo ""
-    if [ -n "$ROOT_INPUT" ]; then
-      ROOT_ARGS="-uroot -p${ROOT_INPUT}"
-    else
-      ROOT_ARGS="-uroot"
-    fi
+    ROOT_PASSWORD=$ROOT_INPUT
     unset ROOT_INPUT
   fi
 
-  if mysql $ROOT_ARGS -e "SELECT 1" >/dev/null 2>&1; then
+  if mysql_root -e "SELECT 1" >/dev/null 2>&1; then
     info "使用 MySQL root 连接创建数据库与用户..."
-    mysql $ROOT_ARGS -e "
-      CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-      CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PASSWORD}';
-      CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'127.0.0.1' IDENTIFIED BY '${MYSQL_PASSWORD}';
-      GRANT ALL PRIVILEGES ON \`${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'localhost';
-      GRANT ALL PRIVILEGES ON \`${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'127.0.0.1';
-      FLUSH PRIVILEGES;
-    " && ok "数据库 ${MYSQL_DATABASE} 与用户 ${MYSQL_USER} 创建完成" \
-      || warn "建库失败，请手动执行以下 SQL 后重跑本脚本"
+    if [ "$MYSQL_USER" = "root" ]; then
+      mysql_root -e "
+        CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      " && ok "数据库 ${MYSQL_DATABASE} 创建完成（使用本机 root 用户）" \
+        || warn "建库失败，请手动创建数据库 ${MYSQL_DATABASE} 后重跑本脚本"
+    else
+      mysql_root -e "
+        CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+        CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PASSWORD}';
+        CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'127.0.0.1' IDENTIFIED BY '${MYSQL_PASSWORD}';
+        GRANT ALL PRIVILEGES ON \`${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'localhost';
+        GRANT ALL PRIVILEGES ON \`${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'127.0.0.1';
+        FLUSH PRIVILEGES;
+      " && ok "数据库 ${MYSQL_DATABASE} 与用户 ${MYSQL_USER} 创建完成" \
+        || warn "建库失败，请手动执行以下 SQL 后重跑本脚本"
+    fi
   else
     warn "无法连接 MySQL root，请手动创建数据库与用户后重跑本脚本："
     echo ""
@@ -179,7 +212,7 @@ if [ -d "apps/crawler/node_modules" ]; then
   ok "Crawler 依赖已安装（跳过）"
 else
   info "安装 Crawler 依赖（npm install，首次约 1-3 分钟）..."
-  (cd apps/crawler && npm install) || warn "Crawler 依赖安装失败"
+  (cd apps/crawler && npm install) || die "Crawler 依赖安装失败"
   ok "Crawler 依赖安装完成"
 fi
 
@@ -187,19 +220,29 @@ if [ -d "apps/web/node_modules" ]; then
   ok "Web 依赖已安装（跳过）"
 else
   info "安装 Web 依赖（npm install，首次约 2-4 分钟）..."
-  (cd apps/web && npm install) || warn "Web 依赖安装失败"
+  (cd apps/web && npm install) || die "Web 依赖安装失败"
   ok "Web 依赖安装完成"
 fi
 
 # ---------- 7. 安装 Playwright Chromium ----------
-if [ -d "$HOME/.cache/ms-playwright" ] || [ -d "$HOME/Library/Caches/ms-playwright" ]; then
+playwright_chromium_ready() {
+  (cd apps/crawler && node -e '
+const fs = require("node:fs")
+const { chromium } = require("playwright")
+process.exit(fs.existsSync(chromium.executablePath()) ? 0 : 1)
+' >/dev/null 2>&1)
+}
+
+if playwright_chromium_ready; then
   ok "Playwright Chromium 已安装（跳过）"
 else
   info "安装 Playwright Chromium（约 150MB，国内可设 PLAYWRIGHT_DOWNLOAD_HOST 镜像加速）..."
   (cd apps/crawler && npm exec playwright install chromium) 2>/dev/null \
     || warn "Chromium 下载失败，可设置镜像后重试："
-  if ! [ -d "$HOME/.cache/ms-playwright" ] && ! [ -d "$HOME/Library/Caches/ms-playwright" ]; then
+  if ! playwright_chromium_ready; then
     warn "  PLAYWRIGHT_DOWNLOAD_HOST=\"https://npmmirror.com/mirrors/playwright\" sh ./scripts/setup-local.sh"
+  else
+    ok "Playwright Chromium 安装完成"
   fi
 fi
 

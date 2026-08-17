@@ -31,9 +31,9 @@ for name in crawler api scheduler web; do
   if kill -0 "$pid" 2>/dev/null; then
     pkill -TERM -P "$pid" 2>/dev/null
     kill -9 "$pid" 2>/dev/null
-    warn "$name（PID $pid）强制终止"
+    warn "${name}（PID ${pid}）强制终止"
   else
-    ok "$name（PID $pid）已停止"
+    ok "${name}（PID ${pid}）已停止"
   fi
   rm -f "$pidfile"
 done
