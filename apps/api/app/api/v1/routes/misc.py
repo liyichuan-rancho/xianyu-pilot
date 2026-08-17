@@ -1419,11 +1419,13 @@ async def websocket_start(
         #
         # 去重：_refresh_token 中的 _auto_solve_captcha_after_failure 可能已触发求解
         # （10 分钟去重窗口），此处检查避免重复启动浏览器实例。
-        from app.services.captcha_solver import handle_captcha_for_account
-        from app.services.ws_client import _AUTO_SOLVE_LAST_TS
+        from ....services.captcha_solver import (
+            handle_captcha_for_account,
+            mark_auto_solve_started,
+            should_auto_solve,
+        )
 
-        last_solve_ts = _AUTO_SOLVE_LAST_TS.get(account_id, 0)
-        solve_already_running = (time.time() - last_solve_ts) < 600
+        solve_already_running = not should_auto_solve(account_id)
 
         if solve_already_running:
             logger.info(
@@ -1431,6 +1433,10 @@ async def websocket_start(
                 account_id,
             )
         else:
+            # 先占用共享去重窗口，再创建后台任务。这样 WS 客户端、Cookie
+            # 保活和用户重复点击不会并发启动多个浏览器求解实例。
+            mark_auto_solve_started(account_id)
+
             async def _bg_captcha_recover():
                 try:
                     captcha_result = await handle_captcha_for_account(
