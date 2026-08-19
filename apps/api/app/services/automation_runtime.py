@@ -387,7 +387,7 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
     # Step 3: 检查通用模型是否已配置
     provider_config = await _resolve_ai_config()
     if not provider_config.get("enabled"):
-        logger.warning("AI 自动回复跳过：通用模型未配置或缺少 baseUrl/apiKey/model accountId=%d", account_id)
+        logger.warning("AI 自动回复跳过：通用模型未配置或缺少所选调用方式的必要参数 accountId=%d", account_id)
         return
 
     # Step 4: 拼装 system prompt（systemPrompt + 商品事实 + 知识库 + 聊天规则 + 人设）

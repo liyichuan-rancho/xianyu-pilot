@@ -7,7 +7,7 @@
       <div class="page-hero-copy">
         <span class="page-pill">General Model</span>
         <h1>模型配置</h1>
-        <p>通用模型用于接待回复、文本生成、商品改写等场景。向量模型（Embedding）已拆分到独立页签维护，避免混填。</p>
+        <p>通用模型用于接待回复、文本生成、商品改写等场景，可选择远程 API 或本机 Codex / Cursor CLI。</p>
 
         <div class="page-actions">
           <AppButton type="primary" :loading="saving" :disabled="!configAvailable" @click="save">保存配置</AppButton>
@@ -16,16 +16,16 @@
       </div>
 
       <div class="hero-badges">
-        <div class="status-card" :class="runtimeStatusAvailable && runtimeStatus.generalModelConfigured ? 'green' : 'orange'">
+        <div class="status-card" :class="modelRuntimeReady ? 'green' : 'orange'">
           <span>通用模型</span>
-          <strong>{{ runtimeStatusAvailable ? (runtimeStatus.generalModelConfigured ? '已配置' : '未设置') : '状态未知' }}</strong>
-          <small>对话 / 改写 / 文本生成</small>
+          <strong>{{ modelRuntimeLabel }}</strong>
+          <small>{{ modelRuntimeDescription }}</small>
         </div>
       </div>
     </section>
 
     <div class="page-grid">
-      <CardPanel title="通用模型" desc="所有通用 AI 调用都会优先读取这里的配置。建议按照“供应商 → 模型名 → 地址 → Key”的顺序填写。">
+      <CardPanel title="通用模型" desc="所有通用 AI 调用都会优先读取这里的配置。先选择调用方式，再填写对应的模型参数。">
         <div class="config-overview">
           <article class="overview-card">
             <span>适用场景</span>
@@ -34,17 +34,41 @@
           </article>
           <article class="overview-card">
             <span>填写原则</span>
-            <strong>优先保证可调用，再处理别名与策略配置</strong>
-            <p>先把最基础的供应商、模型名、接口地址和 API Key 填对，再补超时、润色策略等增强参数。</p>
+            <strong>先选择调用方式，再确认运行环境</strong>
+            <p>远程 API 需要地址和 Key；本机 CLI 需要后端进程能找到命令，并已使用同一系统账号完成登录。</p>
           </article>
         </div>
 
         <div class="field-grid two">
           <AdminConfigField
+            label="调用方式"
+            hint="可使用 OpenAI 兼容 API，也可复用本机已登录的 Codex CLI 或 Cursor CLI。"
+            meta="CLI 由后端进程直接启动，不需要在这里填写 API Key；模型名称仍可自行指定。"
+            badge="第一步"
+            wide
+            required
+          >
+            <select v-model="form.generalModel.transport" class="config-input config-select">
+              <option value="openai-compatible">OpenAI 兼容 API</option>
+              <option value="codex-cli">本机 Codex CLI</option>
+              <option value="cursor-cli">本机 Cursor CLI</option>
+            </select>
+            <div v-if="runtimeStatusAvailable" class="cli-detection-row">
+              <span :class="runtimeStatus.codexCliAvailable ? 'available' : ''">
+                Codex CLI：{{ runtimeStatus.codexCliAvailable ? '已检测到' : '未检测到' }}
+              </span>
+              <span :class="runtimeStatus.cursorCliAvailable ? 'available' : ''">
+                Cursor CLI：{{ runtimeStatus.cursorCliAvailable ? '已检测到' : '未检测到' }}
+              </span>
+            </div>
+          </AdminConfigField>
+
+          <AdminConfigField
+            v-if="isApiTransport"
             label="模型供应商"
             hint="用于标记你当前接入的是哪家服务，方便后续联调与排查。"
             meta="直接从下拉列表中选择供应商即可，无需手动输入。若列表中没有你使用的供应商，可选择“其他 / 自定义”。"
-            badge="第一步"
+            badge="API 参数"
             required
           >
             <select v-model="form.generalModel.provider" class="config-input config-select">
@@ -62,8 +86,8 @@
 
           <AdminConfigField
             label="模型名称"
-            hint="系统默认会按这个名称发起调用，建议填写对外使用的标准模型名。"
-            meta="示例：gpt-4o-mini。若你使用代理网关，这里通常填写网关要求的模型字段。"
+            hint="系统会把这个名称传给所选 API 或 CLI，可按你的账号权限和本机配置自行填写。"
+            :meta="isApiTransport ? '示例：gpt-4o-mini。使用代理网关时填写网关要求的模型字段。' : 'Codex 示例：gpt-5；Cursor 示例：gpt-5 或 sonnet-4-thinking。请以当前 CLI 可用模型为准。'"
             badge="核心参数"
             required
           >
@@ -71,6 +95,7 @@
           </AdminConfigField>
 
           <AdminConfigField
+            v-if="isApiTransport"
             label="接口地址"
             hint="仅支持可解析的公网 HTTPS OpenAI 兼容根地址；系统会拒绝明文 HTTP、本机、内网、重定向与代理环境。"
             meta="大多数服务以 /v1 结尾。切换到不同主机时必须同时重新输入 API Key，避免把已保存密钥发送到新地址。"
@@ -81,6 +106,7 @@
           </AdminConfigField>
 
           <AdminConfigField
+            v-if="isApiTransport"
             label="API Key"
             hint="用于实际鉴权。保存后不会回显完整内容，只显示已保存状态。"
             meta="Key 轮换时直接覆盖即可；修改接口主机时也必须重新输入。若报 401/403，请检查 Key 与地址是否匹配。"
@@ -93,6 +119,25 @@
               autocomplete="off"
             />
           </AdminConfigField>
+
+          <AdminConfigField
+            v-if="isCliTransport"
+            label="CLI 命令路径"
+            :hint="`留空时使用 ${defaultCliCommand}；也可填写该命令的绝对路径。`"
+            meta="只允许所选 CLI 的可执行文件名或绝对路径，系统不会把这里的内容交给 shell 解析。"
+            badge="本机环境"
+          >
+            <input
+              v-model="form.generalModel.cliPath"
+              class="config-input"
+              :placeholder="config.generalModel.cliPath || defaultCliCommand"
+            />
+          </AdminConfigField>
+
+          <div v-if="isCliTransport" class="cli-runtime-notice field-wide">
+            <strong>CLI 在后端运行环境中执行</strong>
+            <p>请先在运行 API 服务的同一系统账号下完成 CLI 登录。本地裸机部署可直接复用本机命令；Docker 部署默认看不到宿主机 CLI，需要把 CLI 程序及其账号配置提供给 API 和 Worker 容器。</p>
+          </div>
 
           <AdminConfigField
             label="请求超时（秒）"
@@ -141,14 +186,14 @@
             <div class="guide-icon">A</div>
             <div>
               <strong>优先保证基础调用通</strong>
-              <p>先确保模型名、接口地址和 API Key 可以正常返回结果，再去优化策略与超时参数。</p>
+              <p>API 模式检查地址与 Key；CLI 模式检查命令可见、账号已登录，并确认模型名可用。</p>
             </div>
           </article>
           <article class="guide-card">
             <div class="guide-icon">B</div>
             <div>
-              <strong>代理网关要看兼容协议</strong>
-              <p>如果你不是直连官方接口，而是使用中转服务，模型名和地址请以中转服务文档为准。</p>
+              <strong>CLI 采用受限执行模式</strong>
+              <p>Codex 使用临时会话和只读沙箱，Cursor 使用 Ask 模式；每次调用都受页面中的超时限制。</p>
             </div>
           </article>
           <article class="guide-card">
@@ -162,7 +207,8 @@
 
         <ul class="hint-list">
           <li>通用模型负责站内大部分文本生成能力，和向量模型（Embedding）不是同一个用途。</li>
-          <li>如果保存后仍报错，先检查接口地址是否正确、模型名是否被服务端支持、Key 是否和当前供应商匹配。</li>
+          <li>如果 API 模式保存后仍报错，先检查接口地址、模型名以及 Key 是否匹配。</li>
+          <li>如果 CLI 模式不可用，请在运行后端的系统账号下执行 <code>codex --version</code> 或 <code>cursor-agent --version</code> 排查 PATH，并确认已经登录。</li>
           <li>如使用代理网关，请直接在“模型名称”中填写网关要求的模型字段，避免同一配置出现两个名称。</li>
           <li>建议为生产环境单独准备一套 API Key，避免与个人测试或其他项目混用，降低排查成本。</li>
         </ul>
@@ -200,6 +246,9 @@ const {
 
 // 供应商下拉选项：预置常见厂商 + “其他 / 自定义”
 const CUSTOM_PROVIDER_VALUE = '__custom__'
+const API_TRANSPORT = 'openai-compatible'
+const CODEX_CLI_TRANSPORT = 'codex-cli'
+const CURSOR_CLI_TRANSPORT = 'cursor-cli'
 const PROVIDER_PRESETS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'deepseek', label: 'DeepSeek 深度求索' },
@@ -216,6 +265,51 @@ const PROVIDER_PRESETS = [
 ]
 
 const customProvider = ref('')
+
+const form = reactive({
+  generalModel: {
+    transport: API_TRANSPORT,
+    provider: '',
+    modelName: '',
+    baseUrl: '',
+    apiKey: '',
+    cliPath: '',
+    requestTimeout: null,
+    polishKeywords: '',
+    polishForbiddenKeywords: '',
+  },
+})
+
+const selectedTransport = computed(
+  () => form.generalModel.transport || config.generalModel?.transport || API_TRANSPORT
+)
+const isApiTransport = computed(() => selectedTransport.value === API_TRANSPORT)
+const isCliTransport = computed(() =>
+  [CODEX_CLI_TRANSPORT, CURSOR_CLI_TRANSPORT].includes(selectedTransport.value)
+)
+const defaultCliCommand = computed(() =>
+  selectedTransport.value === CODEX_CLI_TRANSPORT ? 'codex' : 'cursor-agent'
+)
+const modelRuntimeReady = computed(() => {
+  if (!runtimeStatusAvailable.value || !runtimeStatus.generalModelConfigured) return false
+  if (![CODEX_CLI_TRANSPORT, CURSOR_CLI_TRANSPORT].includes(runtimeStatus.generalModelTransport)) return true
+  return runtimeStatus.generalModelCliAvailable
+})
+const modelRuntimeLabel = computed(() => {
+  if (!runtimeStatusAvailable.value) return '状态未知'
+  if (!runtimeStatus.generalModelConfigured) return '未设置'
+  if (
+    [CODEX_CLI_TRANSPORT, CURSOR_CLI_TRANSPORT].includes(runtimeStatus.generalModelTransport) &&
+    !runtimeStatus.generalModelCliAvailable
+  ) return 'CLI 不可用'
+  return '已配置'
+})
+const modelRuntimeDescription = computed(() => {
+  if (!runtimeStatusAvailable.value) return '对话 / 改写 / 文本生成'
+  if (runtimeStatus.generalModelTransport === CODEX_CLI_TRANSPORT) return '本机 Codex CLI'
+  if (runtimeStatus.generalModelTransport === CURSOR_CLI_TRANSPORT) return '本机 Cursor CLI'
+  return 'OpenAI 兼容 API'
+})
 
 // 已保存但不在预置列表中的供应商，作为单独一项展示，避免丢失原值
 const providerOptions = computed(() => {
@@ -235,18 +329,6 @@ const isCustomProvider = computed(
   () => form.generalModel.provider === CUSTOM_PROVIDER_VALUE
 )
 
-const form = reactive({
-  generalModel: {
-    provider: '',
-    modelName: '',
-    baseUrl: '',
-    apiKey: '',
-    requestTimeout: null,
-    polishKeywords: '',
-    polishForbiddenKeywords: '',
-  },
-})
-
 onMounted(() => {
   window.addEventListener('xya-header-action', onHeaderAction)
   loadPage()
@@ -260,6 +342,7 @@ onBeforeUnmount(() => {
 // 用户选中输入框后可直接输入新值，无需先删除原有内容。
 function syncForm() {
   const g = config.generalModel || {}
+  form.generalModel.transport = g.transport || API_TRANSPORT
   const savedProvider = (g.provider || '').trim()
   if (savedProvider && !PROVIDER_PRESETS.some((p) => p.value === savedProvider)) {
     form.generalModel.provider = CUSTOM_PROVIDER_VALUE
@@ -271,6 +354,7 @@ function syncForm() {
   form.generalModel.modelName = ''
   form.generalModel.baseUrl = ''
   form.generalModel.apiKey = ''
+  form.generalModel.cliPath = ''
   form.generalModel.requestTimeout = null
   form.generalModel.polishKeywords = ''
   form.generalModel.polishForbiddenKeywords = ''
@@ -297,11 +381,18 @@ async function save() {
   if (!provider) provider = (prev.provider || '').trim()
 
   const payload = cloneOpenSourceConfig(config)
+  const transport = selectedTransport.value
+  const previousTransport = prev.transport || API_TRANSPORT
+  const cliPath = isCliTransport.value
+    ? ((form.generalModel.cliPath || '').trim() || (transport === previousTransport ? (prev.cliPath || '').trim() : ''))
+    : (prev.cliPath || '').trim()
   payload.generalModel = {
+    transport,
     provider,
     modelName: pickNext(form.generalModel.modelName, prev.modelName),
     baseUrl: pickNext(form.generalModel.baseUrl, prev.baseUrl),
     apiKey: pickNext(form.generalModel.apiKey, prev.apiKey),
+    cliPath,
     requestTimeout:
       Number(form.generalModel.requestTimeout) ||
       Number(prev.requestTimeout) ||
@@ -487,6 +578,57 @@ function onHeaderAction(event) {
 /* “其他 / 自定义”时展开的自定义输入框，与下拉框形成层级关系 */
 .custom-provider-input {
   margin-top: 10px;
+}
+
+.cli-detection-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cli-detection-row span {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #fff4e8;
+  color: #a45b16;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cli-detection-row span.available {
+  background: #eaf9ef;
+  color: #16794a;
+}
+
+.field-wide {
+  grid-column: 1 / -1;
+}
+
+.cli-runtime-notice {
+  padding: 14px 16px;
+  border: 1px solid rgba(96, 135, 206, 0.24);
+  border-radius: 16px;
+  background: linear-gradient(135deg, #f7faff, #f1f6ff);
+}
+
+.cli-runtime-notice strong {
+  color: #20385f;
+  font-size: 13px;
+}
+
+.cli-runtime-notice p {
+  margin: 6px 0 0;
+  color: #60738e;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.hint-list code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: #eef3fb;
+  color: #315786;
 }
 
 .guide-grid {

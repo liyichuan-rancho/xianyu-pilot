@@ -14,6 +14,12 @@ from ..core.upload_security import (
     validate_public_https_url_syntax,
 )
 from ..models.entities import ModelConfig, XianyuSysSetting
+from .local_ai_cli import (
+    API_TRANSPORT,
+    is_local_cli_transport,
+    normalize_model_transport,
+    validate_cli_executable_config,
+)
 from .sensitive_config import (
     MODEL_CONFIG_API_KEY_PURPOSE,
     decrypt_runtime_secret,
@@ -115,10 +121,12 @@ def default_open_source_config() -> dict[str, Any]:
         "logoUrl": "/xya/brand/brand_004.png",
         "crawlerBaseUrl": settings.crawler_base_url,
         "generalModel": {
+            "transport": API_TRANSPORT,
             "provider": "",
             "modelName": settings.ai_provider_model,
             "baseUrl": settings.ai_provider_base_url,
             "apiKey": settings.ai_provider_api_key,
+            "cliPath": "",
             "requestTimeout": settings.ai_provider_timeout_seconds,
             "polishKeywords": "",
             "polishForbiddenKeywords": "",
@@ -150,6 +158,10 @@ def normalize_open_source_config(payload: Any) -> dict[str, Any]:
         or _as_text(general_payload.get("realModel"))
         or general_defaults["modelName"]
     )
+    general_transport = normalize_model_transport(
+        general_payload.get("transport") or general_payload.get("accessMode"),
+        general_payload.get("provider"),
+    )
 
     return {
         "siteName": _as_text(raw.get("siteName")) or defaults["siteName"],
@@ -157,10 +169,12 @@ def normalize_open_source_config(payload: Any) -> dict[str, Any]:
         "logoUrl": _as_text(raw.get("logoUrl")) or defaults["logoUrl"],
         "crawlerBaseUrl": _as_text(raw.get("crawlerBaseUrl")) or defaults["crawlerBaseUrl"],
         "generalModel": {
+            "transport": general_transport,
             "provider": _as_text(general_payload.get("provider")),
             "modelName": canonical_model_name,
             "baseUrl": _as_text(general_payload.get("baseUrl")) or general_defaults["baseUrl"],
             "apiKey": _as_text(general_payload.get("apiKey")) or general_defaults["apiKey"],
+            "cliPath": _as_text(general_payload.get("cliPath")),
             "requestTimeout": _as_int(
                 general_payload.get("requestTimeout"),
                 general_defaults["requestTimeout"],
@@ -298,9 +312,23 @@ async def save_open_source_config(db: AsyncSession, payload: Any) -> dict[str, A
         preserve_blank_secret_values(payload, existing_config)
     )
     config["crawlerBaseUrl"] = settings.crawler_base_url
+    general_transport = normalize_model_transport(
+        config["generalModel"].get("transport"),
+        config["generalModel"].get("provider"),
+    )
+    config["generalModel"]["transport"] = general_transport
+    if is_local_cli_transport(general_transport):
+        if not _as_text(config["generalModel"].get("modelName")):
+            raise ValueError("generalModel.modelName 不能为空")
+        validate_cli_executable_config(
+            general_transport,
+            config["generalModel"].get("cliPath"),
+        )
     for section in ("generalModel", "embeddingModel"):
         values = config[section]
         raw_values = raw_sections[section]
+        if section == "generalModel" and is_local_cli_transport(general_transport):
+            continue
         if "baseUrl" not in raw_values:
             continue
         candidate = _as_text(values.get("baseUrl"))

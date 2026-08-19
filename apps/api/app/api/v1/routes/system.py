@@ -16,6 +16,7 @@ from ....models.entities import (
     XianyuSysSetting,
 )
 from ....services.ai_provider import invalidate_model_config_cache, is_ai_configured
+from ....services.local_ai_cli import cli_runtime_status
 from ....services.commercial_bridge import (
     default_about_content,
     get_commercial_bridge_runtime,
@@ -386,7 +387,7 @@ async def get_runtime_status(
 
     general_model = (config or {}).get("generalModel") or {}
     embedding_model = (config or {}).get("embeddingModel") or {}
-    return ResultObject.success({
+    status = {
         "dbConnected": db_connected,
         "dbVersion": db_version,
         "redisConnected": redis_connected,
@@ -407,7 +408,14 @@ async def get_runtime_status(
         "commercialFrontendUrl": commercial_runtime.get("commercialFrontendUrl") or "",
         "generalModelConfigured": is_ai_configured(general_model),
         "embeddingModelConfigured": is_ai_configured(embedding_model),
-    })
+    }
+    status.update(
+        cli_runtime_status(
+            general_model.get("transport"),
+            general_model.get("cliPath"),
+        )
+    )
+    return ResultObject.success(status)
 
 
 @system_info_router.post("/currentUser", response_model=ResultObject[dict])

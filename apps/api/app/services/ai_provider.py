@@ -12,11 +12,19 @@ from app.core.upload_security import (
     request_public_https,
     validate_public_https_url_syntax,
 )
+from app.services.local_ai_cli import (
+    API_TRANSPORT,
+    LocalAICLIError,
+    generate_text_with_local_cli,
+    is_local_cli_transport,
+    normalize_model_transport,
+    validate_cli_executable_config,
+)
 from app.services.open_source_config import load_open_source_config_from_store
 
 logger = logging.getLogger(__name__)
 
-AI_NOT_CONFIGURED_ERROR = "AI Provider 未启用或缺少 baseUrl/apiKey/model"
+AI_NOT_CONFIGURED_ERROR = "AI 模型未启用或缺少所选调用方式的必要配置"
 _PLACEHOLDER_API_KEYS = {
     "test",
     "test-key",
@@ -71,6 +79,20 @@ def is_ai_configured(config: Optional[Dict[str, Any]]) -> bool:
     enabled = config.get("enabled")
     if enabled is None:
         enabled = True
+    transport = normalize_model_transport(
+        config.get("transport") or config.get("accessMode"),
+        config.get("provider") or config.get("providerName"),
+    )
+    if is_local_cli_transport(transport):
+        try:
+            validate_cli_executable_config(
+                transport,
+                config.get("cli_path") or config.get("cliPath"),
+            )
+            cli_config_valid = True
+        except ValueError:
+            cli_config_valid = False
+        return bool(enabled and model and cli_config_valid)
     normalized_key = api_key.lower().replace("_", "-").strip()
     collapsed_key = normalized_key.replace("-", "").replace(" ", "")
     placeholder_key = (
@@ -106,19 +128,26 @@ async def _load_chat_model_config_from_db() -> Optional[Dict[str, Any]]:
         config = await load_open_source_config_from_store()
         general_model = (config or {}).get("generalModel") or {}
         merged = {
+            "transport": normalize_model_transport(
+                general_model.get("transport") or general_model.get("accessMode"),
+                general_model.get("provider"),
+            ),
             "providerName": str(general_model.get("provider") or "").strip(),
             "modelName": str(general_model.get("modelName") or general_model.get("realModel") or "").strip(),
             "baseUrl": str(general_model.get("baseUrl") or "").strip(),
             "apiKey": str(general_model.get("apiKey") or "").strip(),
+            "cliPath": str(general_model.get("cliPath") or "").strip(),
             "requestTimeout": int(general_model.get("requestTimeout") or settings.ai_provider_timeout_seconds or 30),
             "polishKeywords": str(general_model.get("polishKeywords") or "").strip(),
             "polishForbiddenKeywords": str(general_model.get("polishForbiddenKeywords") or "").strip(),
         }
         merged["enabled"] = is_ai_configured({
             "enabled": True,
+            "transport": merged["transport"],
             "baseUrl": merged["baseUrl"],
             "apiKey": merged["apiKey"],
             "modelName": merged["modelName"],
+            "cliPath": merged["cliPath"],
         })
 
         if not any(merged.values()):
@@ -148,12 +177,28 @@ async def _load_chat_model_config_from_db() -> Optional[Dict[str, Any]]:
 async def _resolve_ai_config() -> Dict[str, Any]:
     db_config = await _load_chat_model_config_from_db()
     if db_config:
+        transport = normalize_model_transport(
+            db_config.get("transport"),
+            db_config.get("providerName"),
+        )
         base_url = str(db_config.get("baseUrl") or "").strip()
         api_key = str(db_config.get("apiKey") or "").strip()
         model = str(db_config.get("modelName") or db_config.get("realModel") or "").strip()
         enabled = bool(db_config.get("enabled", True))
+        if is_local_cli_transport(transport):
+            return {
+                "transport": transport,
+                "cli_path": str(db_config.get("cliPath") or "").strip(),
+                "base_url": "",
+                "api_key": "",
+                "model": model,
+                "enabled": enabled,
+                "source": "settings",
+                "request_timeout": int(db_config.get("requestTimeout") or settings.ai_provider_timeout_seconds or 30),
+            }
         if base_url and api_key and model and enabled:
             return {
+                "transport": API_TRANSPORT,
                 "base_url": base_url,
                 "api_key": api_key,
                 "model": model,
@@ -164,6 +209,7 @@ async def _resolve_ai_config() -> Dict[str, Any]:
 
     base_url = (settings.ai_provider_base_url or "").strip()
     return {
+        "transport": API_TRANSPORT,
         "base_url": base_url,
         "api_key": (settings.ai_provider_api_key or "").strip(),
         "model": (settings.ai_provider_model or "").strip(),
@@ -315,14 +361,15 @@ async def generate_text(
 ) -> Dict[str, Any]:
     request_id = str(uuid.uuid4())
     cfg = await _resolve_ai_config()
+    transport = normalize_model_transport(cfg.get("transport"))
     base_url = (cfg["base_url"] or "").rstrip("/")
-    if base_url and not base_url.endswith("/v1"):
+    if transport == API_TRANSPORT and base_url and not base_url.endswith("/v1"):
         base_url += "/v1"
 
     result: Dict[str, Any] = {
         "requestId": request_id,
         "scene": scene,
-        "provider": "openai-compatible",
+        "provider": transport,
         "model": cfg["model"],
         "configured": is_ai_configured({**cfg, "base_url": base_url}),
         "configSource": cfg["source"],
@@ -344,6 +391,32 @@ async def generate_text(
         "temperature": temperature,
         "messages": messages,
     }
+
+    if is_local_cli_transport(transport):
+        try:
+            content = await generate_text_with_local_cli(
+                transport=transport,
+                cli_path=cfg.get("cli_path"),
+                model=cfg["model"],
+                scene=scene,
+                messages=messages,
+                temperature=temperature,
+                timeout_seconds=int(cfg.get("request_timeout") or 30),
+            )
+            result.update({"ok": True, "content": content, "usage": {}})
+            return result
+        except LocalAICLIError as exc:
+            logger.warning("Local AI CLI request failed: transport=%s", transport)
+            result.update({"ok": False, "error": str(exc)})
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Local AI CLI request failed unexpectedly: transport=%s kind=%s",
+                transport,
+                exc.__class__.__name__,
+            )
+            result.update({"ok": False, "error": "本机 AI CLI 调用失败"})
+            return result
 
     try:
         response = await request_public_https(

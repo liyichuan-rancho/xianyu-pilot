@@ -14,11 +14,13 @@ export function createDefaultOpenSourceConfig() {
     logoUrl: '',
     crawlerBaseUrl: '',
     generalModel: {
+      transport: 'openai-compatible',
       provider: '',
       modelName: '',
       baseUrl: '',
       apiKey: '',
       apiKeyConfigured: false,
+      cliPath: '',
       requestTimeout: 15,
       polishKeywords: '',
       polishForbiddenKeywords: '',
@@ -64,6 +66,10 @@ export function createDefaultRuntimeStatus() {
     commercialFrontendUrl: '',
     generalModelConfigured: false,
     embeddingModelConfigured: false,
+    generalModelTransport: 'openai-compatible',
+    generalModelCliAvailable: false,
+    codexCliAvailable: false,
+    cursorCliAvailable: false,
   }
 }
 
@@ -77,6 +83,7 @@ export function normalizeOpenSourceConfig(config = {}) {
     logoUrl: String(config?.logoUrl || defaults.logoUrl),
     crawlerBaseUrl: String(config?.crawlerBaseUrl || defaults.crawlerBaseUrl),
     generalModel: {
+      transport: String(generalModel.transport || generalModel.accessMode || defaults.generalModel.transport),
       provider: String(generalModel.provider || defaults.generalModel.provider),
       // realModel is accepted here only to migrate older saved settings. New
       // configuration has one canonical model name.
@@ -84,6 +91,7 @@ export function normalizeOpenSourceConfig(config = {}) {
       baseUrl: String(generalModel.baseUrl || defaults.generalModel.baseUrl),
       apiKey: String(generalModel.apiKey || defaults.generalModel.apiKey),
       apiKeyConfigured: Boolean(generalModel.apiKeyConfigured || generalModel.apiKey),
+      cliPath: String(generalModel.cliPath || defaults.generalModel.cliPath),
       requestTimeout: Number(generalModel.requestTimeout || defaults.generalModel.requestTimeout) || 15,
       polishKeywords: String(generalModel.polishKeywords || defaults.generalModel.polishKeywords),
       polishForbiddenKeywords: String(
