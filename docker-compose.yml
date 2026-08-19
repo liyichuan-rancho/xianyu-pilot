@@ -248,7 +248,6 @@ services:
       REDIS_PORT: 6379
       REDIS_PASSWORD_FILE: /run/secrets/redis_password
       JWT_SECRET_FILE: /run/secrets/jwt_secret
-      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-43200000}
       JWT_ALGORITHM: HS256
       JWT_ISSUER: ${JWT_ISSUER:-xianyu-assistant-api}
       JWT_AUDIENCE: ${JWT_AUDIENCE:-xianyu-assistant-web}

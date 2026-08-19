@@ -416,7 +416,7 @@ function startSse() {
 
 async function handleLoginSuccess(payload) {
   loggingIn.value = true
-  if (payload?.token) setAuth(payload.token, payload.username, { remember: payload.remember })
+  if (payload?.token) setAuth(payload.token, payload.username)
   currentUserInfo.value = { username: payload?.username || getCachedUsername() || '管理员', avatar: '/xya/chat_ui_assets/chat_ui_assets_023.png' }
   try {
     await loadCurrentUser()

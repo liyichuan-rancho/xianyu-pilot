@@ -20,16 +20,14 @@ function write(storage, key, value) {
 }
 
 export function getToken() {
-  return read(globalThis.sessionStorage, TOKEN_KEY) || read(globalThis.localStorage, TOKEN_KEY)
+  return read(globalThis.localStorage, TOKEN_KEY) || read(globalThis.sessionStorage, TOKEN_KEY)
 }
 
-export function setAuth(token, username = '', { remember = false } = {}) {
-  const activeStorage = remember ? globalThis.localStorage : globalThis.sessionStorage
-  const inactiveStorage = remember ? globalThis.sessionStorage : globalThis.localStorage
-  write(inactiveStorage, TOKEN_KEY, '')
-  write(inactiveStorage, USERNAME_KEY, '')
-  write(activeStorage, TOKEN_KEY, token)
-  write(activeStorage, USERNAME_KEY, username)
+export function setAuth(token, username = '') {
+  write(globalThis.sessionStorage, TOKEN_KEY, '')
+  write(globalThis.sessionStorage, USERNAME_KEY, '')
+  write(globalThis.localStorage, TOKEN_KEY, token)
+  write(globalThis.localStorage, USERNAME_KEY, username)
 }
 
 export function clearAuth() {
@@ -40,7 +38,7 @@ export function clearAuth() {
 }
 
 export function getCachedUsername() {
-  return read(globalThis.sessionStorage, USERNAME_KEY) || read(globalThis.localStorage, USERNAME_KEY)
+  return read(globalThis.localStorage, USERNAME_KEY) || read(globalThis.sessionStorage, USERNAME_KEY)
 }
 
 export function isAuthed() {

@@ -168,9 +168,6 @@ class Settings(BaseSettings):
         repr=False,
     )
     jwt_secret_file: str = Field(default="", exclude=True, repr=False)
-    # 12 hours by default. Long-lived access tokens materially increase the
-    # impact of browser/storage compromise.
-    jwt_expiration_ms: int = 43_200_000
     jwt_algorithm: str = "HS256"
     jwt_issuer: str = "xianyu-assistant-api"
     jwt_audience: str = "xianyu-assistant-web"
@@ -276,8 +273,6 @@ class Settings(BaseSettings):
                 raise ValueError("MYSQL_APP_PASSWORD and MYSQL_MIGRATION_PASSWORD must be different")
         if self.jwt_algorithm not in {"HS256", "HS384", "HS512"}:
             raise ValueError("JWT_ALGORITHM must be one of HS256/HS384/HS512")
-        if not 300_000 <= self.jwt_expiration_ms <= 86_400_000:
-            raise ValueError("JWT_EXPIRATION_MS must be between 5 minutes and 24 hours")
         if not 1 <= self.login_max_attempts <= 100:
             raise ValueError("LOGIN_MAX_ATTEMPTS must be between 1 and 100")
         if not 1 <= self.login_lock_minutes <= 1440:

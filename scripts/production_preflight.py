@@ -265,7 +265,6 @@ def validate(values: dict[str, str], env_path: Path | None = None) -> Validation
             "runtime and migration credentials must be different",
         )
 
-    _validate_integer(values, report, "JWT_EXPIRATION_MS", 300_000, 86_400_000)
     _validate_integer(values, report, "LOGIN_MAX_ATTEMPTS", 1, 100)
     _validate_integer(values, report, "LOGIN_LOCK_MINUTES", 1, 1_440)
     _validate_integer(values, report, "API_RATE_LIMIT_PER_MINUTE", 1, 100_000)

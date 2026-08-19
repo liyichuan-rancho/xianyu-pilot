@@ -248,7 +248,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 "username": payload["username"],
                 "role": "admin",
                 "jti": payload["jti"],
-                "exp": payload["exp"],
+                "exp": payload.get("exp"),
             }
 
         response = await call_next(request)

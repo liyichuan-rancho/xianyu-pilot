@@ -49,13 +49,6 @@
         </button>
       </div>
 
-      <div class="auth-inline-row">
-        <label class="auth-check">
-          <input v-model="remember" type="checkbox" />
-          <span>记住登录</span>
-        </label>
-      </div>
-
       <button class="auth-submit" type="submit" :disabled="!canSubmit" :aria-busy="loading">
         {{ loading ? '登录中...' : '登录' }}
       </button>
@@ -83,7 +76,6 @@ const emit = defineEmits(['navigate', 'login-success'])
 const username = ref('')
 const password = ref('')
 const showPwd = ref(false)
-const remember = ref(false)
 const loading = ref(false)
 const errorMsg = ref('')
 
@@ -117,7 +109,7 @@ async function handleLogin() {
       username: username.value.trim(),
       password: password.value
     })
-    emit('login-success', { ...(res.data || {}), remember: remember.value })
+    emit('login-success', res.data || {})
   } catch (error) {
     errorMsg.value = friendlyError(error, '登录失败，请检查账号、密码或网络状态')
   } finally {

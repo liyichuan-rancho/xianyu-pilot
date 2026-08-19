@@ -9,7 +9,7 @@ from typing import Any
 
 import bcrypt
 import jwt
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from fastapi import Request
 from app.core.config import settings
 from app.core.redis_client import redis_delete, redis_exists, redis_get, redis_incr, redis_set
@@ -68,7 +68,6 @@ def create_token(username: str) -> str:
         "iat": now,
         "nbf": now,
         "auth_time": time.time(),
-        "exp": now + timedelta(milliseconds=settings.jwt_expiration_ms),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
@@ -82,7 +81,7 @@ def decode_token(token: str) -> dict:
         audience=settings.jwt_audience,
         leeway=30,
         options={
-            "require": ["sub", "username", "role", "jti", "iss", "aud", "iat", "nbf", "exp"],
+            "require": ["sub", "username", "role", "jti", "iss", "aud", "iat", "nbf"],
         },
     )
 
@@ -93,8 +92,8 @@ def decode_token(token: str) -> dict:
 _BLACKLIST_PREFIX = "jwt_blacklist:"
 _TOKENS_VALID_AFTER_KEY = "jwt_tokens_valid_after:admin"
 _LOGIN_ATTEMPT_PREFIX = "login_attempts:"
-# 内存回退：jti -> expiry(epoch seconds)
-_mem_blacklist: dict = {}
+# 内存回退：jti -> expiry(epoch seconds)；None 表示永久撤销
+_mem_blacklist: dict[str, float | None] = {}
 _mem_blacklist_lock = asyncio.Lock()
 
 
@@ -107,7 +106,7 @@ def _allow_security_memory_fallback() -> bool:
 def _cleanup_mem_blacklist() -> None:
     """清理内存中过期的黑名单项。"""
     now = time.time()
-    expired = [j for j, exp in _mem_blacklist.items() if exp <= now]
+    expired = [j for j, exp in _mem_blacklist.items() if exp is not None and exp <= now]
     for j in expired:
         _mem_blacklist.pop(j, None)
 
@@ -132,12 +131,12 @@ async def is_token_blacklisted(jti: str) -> bool:
     return False
 
 
-async def blacklist_token(jti: str, exp: int) -> None:
-    """将 jti 加入黑名单，TTL 到 token 过期时间（exp 为 epoch seconds）。"""
-    if not jti or not exp:
+async def blacklist_token(jti: str, exp: int | None = None) -> None:
+    """将 jti 加入黑名单。无 exp 的长期 token 会被永久撤销。"""
+    if not jti:
         return
     now = time.time()
-    ttl = max(int(exp - now), 1)
+    ttl = max(int(exp - now), 1) if exp else None
     allow_memory_fallback = _allow_security_memory_fallback()
     await redis_set(
         _BLACKLIST_PREFIX + jti,
@@ -149,15 +148,15 @@ async def blacklist_token(jti: str, exp: int) -> None:
         return
     async with _mem_blacklist_lock:
         _cleanup_mem_blacklist()
-        _mem_blacklist[jti] = float(exp)
+        _mem_blacklist[jti] = float(exp) if exp else None
 
 
 async def revoke_token_payload(payload: dict[str, Any]) -> None:
-    """Revoke one JWT until its natural expiry."""
+    """Revoke one JWT permanently, or until a legacy token's natural expiry."""
     try:
         exp = int(payload.get("exp") or 0)
     except (TypeError, ValueError):
-        exp = 0
+        exp = None
     await blacklist_token(str(payload.get("jti") or ""), exp)
 
 

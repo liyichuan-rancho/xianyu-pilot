@@ -38,7 +38,7 @@ Confirmed incidents must preserve evidence, rotate exposed secrets, invalidate s
 ## Security boundaries
 
 - The public browser boundary is the Web/Nginx container. MySQL, Redis, API, and crawler ports are internal-only in the production Compose topology.
-- API access uses short-lived bearer tokens. Internal API access uses a distinct `INTERNAL_API_TOKEN` and fails closed in production.
+- API access uses non-expiring bearer tokens that remain valid until explicit logout, password change, or signing-key rotation. Internal API access uses a distinct `INTERNAL_API_TOKEN` and fails closed in production.
 - Xianyu cookies, provider keys, bridge tokens, database credentials, and Redis credentials are secrets. They must stay server-side and must not appear in source, screenshots, test output, URLs, telemetry, or support tickets.
 - The crawler can navigate only an explicit HTTPS hostname allowlist. Expanding that allowlist is a security review, not a routine configuration change.
 - The commercial bridge is optional and disabled when its URL/token are blank.

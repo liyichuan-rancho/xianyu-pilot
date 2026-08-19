@@ -25,7 +25,7 @@ async def _decode_admin_credentials(
         "username": payload["username"],
         "role": "admin",
         "jti": payload["jti"],
-        "exp": payload["exp"],
+        "exp": payload.get("exp"),
     }
 
 
