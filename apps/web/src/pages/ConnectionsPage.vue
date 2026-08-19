@@ -3,7 +3,7 @@
     <div>
       <div v-if="error" class="global-notice error">{{ error }}</div>
       <div v-if="notice" class="global-notice success">{{ notice }}</div>
-      <div class="grid stat-grid">
+      <div class="grid stat-grid connection-stat-grid">
         <StatCard title="账号总数" :value="connectionMetric(total)" change="全部记录" icon="account" />
         <StatCard title="在线连接数" :value="connectionMetric(onlineCount)" change="当前页已探测" icon="product" color="green" />
         <StatCard title="离线连接数" :value="connectionMetric(offlineCount)" change="当前页已探测" icon="settings" color="orange" />
@@ -40,19 +40,23 @@
       </CardPanel>
       <div class="grid two-col" style="margin-top:16px"><CardPanel title="实时连接日志"><EmptyState v-if="logs.length===0" icon="📡" title="暂无本次页面操作日志" description="本页执行的连接、断开、重连操作会显示在这里。" /><div v-for="l in logs" :key="l.text+l.time" class="option-line"><span><i class="dot"></i>{{ l.text }}</span><span class="subtle">{{ l.time }}</span></div></CardPanel><CardPanel title="异常告警列表"><EmptyState v-if="dataAvailable === false" icon="⚠️" title="告警状态不可用" description="账号列表加载失败，当前无法确认是否有连接或 Cookie 异常。" /><EmptyState v-else-if="alerts.length===0" icon="✅" title="暂无已确认异常" description="当前已加载且已探测的账号中没有发现连接或 Cookie 异常。" /><div v-for="e in alerts" :key="e.id" class="option-line"><span><i class="dot orange"></i>{{ e.text }}</span><AppButton @click="handleAlert(e)">查看</AppButton></div></CardPanel></div>
     </div>
-    <div class="right-drawer">
-      <div style="display:flex;justify-content:space-between"><h3>连接详情</h3><button class="link" @click="selected = null">×</button></div>
+    <div class="right-drawer connection-drawer">
+      <div class="connection-detail-head"><h3>连接详情</h3><button class="link" aria-label="关闭连接详情" @click="selected = null">×</button></div>
       <template v-if="selected">
-        <div class="product-cell"><img v-if="selected.avatar" :src="selected.avatar" class="avatar" alt=""><div v-else class="avatar"></div><div><strong>{{ selected.name }} <Badge type="blue">账号</Badge></strong><p class="subtle">{{ selected.user }}</p></div><b :style="{marginLeft:'auto',color:selected.connected === true ? 'var(--green)' : (selected.connected === false ? '#ef4444' : '#8c98ae')}">{{ selected.ws }}</b></div>
-        <div class="donut-row" style="margin:22px 0"><div class="health-summary-card"><div class="health-summary-title">实时状态</div><div class="health-summary-desc">{{ selectedStatusSummary }}</div></div><div class="donut-legend"><div><i :style="{ background: selected.connected === true ? '#16bf78' : (selected.connected === false ? '#ef4444' : '#98a2b3') }"></i><span>WebSocket</span><b>{{ selected.ws }}</b></div><div><i :style="{ background: selected.connected === true ? '#16bf78' : '#98a2b3' }"></i><span>心跳状态</span><b>{{ selected.heartbeat }}</b></div><div><i :style="{ background: selected.authState === true ? '#16bf78' : (selected.authState === false ? '#ef4444' : '#98a2b3') }"></i><span>Cookie</span><b>{{ selected.cookie }}</b></div><div><i :style="{ background: selected.lastError ? '#ef4444' : '#98a2b3' }"></i><span>状态</span><b>{{ selected.lastError || selected.status || selected.phase || '-' }}</b></div></div></div>
-        <CardPanel title="连接信息"><div class="option-line"><span>账号 ID</span><b>{{ selected.id }}</b></div><div class="option-line"><span>Cookie 状态</span><b>{{ selected.cookie }}</b></div><div class="option-line"><span>连接阶段</span><b>{{ selected.phase || '-' }}</b></div><div class="option-line"><span>最近错误</span><b v-if="selected.refreshError" style="color:#ef4444">{{ selected.refreshError }}</b><b v-else>{{ selected.lastError || '-' }}</b></div><div class="option-line"><span>WS Token</span><b>{{ selected.wsTokenStatus || '-' }}</b></div><div class="option-line"><span>最近消息</span><b>{{ selected.last }}</b></div><div v-if="selected.refreshError" class="option-line"><span>操作</span><AppButton size="small" @click="refresh(selected)">重新刷新状态</AppButton></div></CardPanel>
-        <div class="grid" style="grid-template-columns:repeat(2,1fr);margin:16px 0">
+        <div class="product-cell connection-account-summary"><img v-if="selected.avatar" :src="selected.avatar" class="avatar" alt=""><div v-else class="avatar"></div><div class="connection-account-copy"><strong>{{ selected.name }} <Badge type="blue">账号</Badge></strong><p class="subtle">{{ selected.user }}</p></div><b class="connection-account-state" :style="{color:selected.connected === true ? 'var(--green)' : (selected.connected === false ? '#ef4444' : '#8c98ae')}">{{ selected.ws }}</b></div>
+        <div class="donut-row connection-health"><div class="health-summary-card"><div class="health-summary-title">实时状态</div><div class="health-summary-desc">{{ selectedStatusSummary }}</div></div><div class="donut-legend connection-status-list"><div class="connection-status-line"><i :style="{ background: selected.connected === true ? '#16bf78' : (selected.connected === false ? '#ef4444' : '#98a2b3') }"></i><span>WebSocket</span><b>{{ selected.ws }}</b></div><div class="connection-status-line"><i :style="{ background: selected.connected === true ? '#16bf78' : '#98a2b3' }"></i><span>心跳状态</span><b>{{ selected.heartbeat }}</b></div><div class="connection-status-line"><i :style="{ background: selected.authState === true ? '#16bf78' : (selected.authState === false ? '#ef4444' : '#98a2b3') }"></i><span>Cookie</span><b>{{ selected.cookie }}</b></div><div class="connection-status-line"><i :style="{ background: selected.lastError ? '#ef4444' : '#98a2b3' }"></i><span>状态</span><b>{{ selected.lastError || selected.status || selected.phase || '-' }}</b></div></div></div>
+        <div v-if="selected.authState === false" class="cookie-recovery" role="alert">
+          <div><strong>Cookie 已失效</strong><p>可先重载已保存的 Cookie 并重连；若仍失败，请重新扫码或更新 Cookie。</p></div>
+          <div class="cookie-recovery-actions"><AppButton size="small" :disabled="isBusy(selected.id)" @click="refreshCookieAction(selected)">{{ isBusy(selected.id) ? '重连中...' : '重载并重连' }}</AppButton><AppButton size="small" type="primary" @click="goToAccountRecovery">重新登录/更新 Cookie</AppButton></div>
+        </div>
+        <CardPanel title="连接信息" class="connection-info-card"><div class="option-line connection-info-line"><span>账号 ID</span><b>{{ selected.id }}</b></div><div class="option-line connection-info-line"><span>Cookie 状态</span><b>{{ selected.cookie }}</b></div><div class="option-line connection-info-line"><span>连接阶段</span><b>{{ selected.phase || '-' }}</b></div><div class="option-line connection-info-line"><span>最近错误</span><b v-if="selected.refreshError" class="danger-value">{{ selected.refreshError }}</b><b v-else>{{ selected.lastError || '-' }}</b></div><div class="option-line connection-info-line"><span>WS Token</span><b>{{ selected.wsTokenStatus || '-' }}</b></div><div class="option-line connection-info-line"><span>最近消息</span><b>{{ selected.last }}</b></div><div v-if="selected.refreshError" class="option-line connection-info-line"><span>操作</span><AppButton size="small" @click="refresh(selected)">重新刷新状态</AppButton></div></CardPanel>
+        <div class="grid connection-actions">
           <AppButton type="primary" :disabled="isBusy(selected.id) || selected.connected == null || selected.operationPending" @click="toggle(selected)">{{ selected.operationPending ? '启动中' : '启动/断开' }}</AppButton>
           <AppButton type="danger" :disabled="isBusy(selected.id) || selected.connected !== true" @click="stop(selected)">断开连接</AppButton>
-          <AppButton :disabled="isBusy(selected.id)" @click="refreshCookieAction(selected)">刷新 Cookie</AppButton>
+          <AppButton :disabled="isBusy(selected.id)" @click="refreshCookieAction(selected)">{{ isBusy(selected.id) ? '重连中...' : '重载 Cookie 并重连' }}</AppButton>
           <AppButton :disabled="isBusy(selected.id)" @click="checkLoginAction(selected)">检查登录</AppButton>
         </div>
-        <CardPanel title="重连策略"><div class="option-line"><span>前端策略</span><Badge>手动控制</Badge></div><div class="option-line"><span>验证码</span><b>{{ selected.captcha || '-' }}</b></div><div class="option-line"><span>接口状态</span><b>{{ selected.status || '-' }}</b></div></CardPanel>
+        <CardPanel title="重连策略"><div class="option-line connection-info-line"><span>前端策略</span><Badge>手动控制</Badge></div><div class="option-line connection-info-line"><span>验证码</span><b>{{ selected.captcha || '-' }}</b></div><div class="option-line connection-info-line"><span>接口状态</span><b>{{ selected.status || '-' }}</b></div></CardPanel>
       </template>
       <EmptyState v-else icon="👈" title="请选择一个连接" description="从左侧列表选择账号，查看连接详情、重连策略和实时状态。" />
     </div>
@@ -68,6 +72,7 @@ import { useDebouncedRef } from '../composables/useDebouncedRef.js'
 import { checkLogin, refreshCookie, startWebSocket, stopWebSocket, websocketStatus } from '../api/websocket.js'
 import { accountAuthState, accountCookieLabel, accountWsConnected } from '../utils/accountAuth.js'
 import { accountName } from '../utils/format.js'
+const emit = defineEmits(['navigate'])
 const cols=[{key:'info',title:'账号信息'},{key:'cookie',title:'Cookie状态'},{key:'ws',title:'WS状态'},{key:'heartbeat',title:'心跳'},{key:'latency',title:'延迟'},{key:'last',title:'最近消息时间'},{key:'proxy',title:'代理'},{key:'op',title:'操作'}]
 const accounts = ref([])
 const statusMap = ref({})
@@ -95,7 +100,7 @@ const refreshErrorMap = ref({})  // { [id]: errorMessage }
 const STATUS_POLL_INTERVAL = 300
 const MAX_STATUS_POLLS = 10
 const STARTUP_PHASES = new Set(['starting', 'refresh_token', 'connecting', 'registering', 'syncing', 'accepted', 'pending'])
-const TERMINAL_FAILURE_PHASES = new Set(['failed', 'error', 'stopped', 'cookie_expired'])
+const TERMINAL_FAILURE_PHASES = new Set(['failed', 'error', 'stopped', 'cookie_expired', 'token_failed', 'auth_failed', 'captcha_failed'])
 const rows = computed(() => accounts.value.map(a => {
   const s = statusMap.value[a.id] || {}
   const phase = s.phase || s.status || ''
@@ -166,7 +171,9 @@ function log(text){ logs.value.unshift({text,time:new Date().toLocaleTimeString(
 function showNotice(text){ notice.value=text; setTimeout(()=>{ if(notice.value===text) notice.value='' }, 3500) }
 function setBusy(id, busy){ busyMap.value = { ...busyMap.value, [id]: busy } }
 function isBusy(id){ return !!busyMap.value[id] }
+function delay(ms){ return new Promise(resolve => setTimeout(resolve, ms)) }
 function syncSelected(accountId){ const latest = rows.value.find(r=>r.id===accountId); if(latest) selected.value = latest }
+function goToAccountRecovery(){ emit('navigate', 'accounts') }
 function patchAccountAuth(accountId, patch = {}) {
   if (!accountId) return
   const account = accounts.value.find(item => item.id === accountId)
@@ -329,15 +336,41 @@ async function stop(row){
 async function refreshCookieAction(row){
   if (!row?.id || isBusy(row.id)) return
   setBusy(row.id, true)
+  error.value = ''
+  notice.value = ''
   try {
-    await refreshCookie(row.id)
+    const res = await refreshCookie(row.id)
+    log(`${row.name} 已重载保存的 Cookie，正在尝试重连`)
+    let latestStatus = res?.data || {}
+    for (let attempt = 1; attempt <= MAX_STATUS_POLLS; attempt += 1) {
+      retryMap.value = { ...retryMap.value, [row.id]: { attempt, max: MAX_STATUS_POLLS, phase: 'retrying' } }
+      if (attempt > 1) await delay(STATUS_POLL_INTERVAL)
+      latestStatus = await refresh(row, { silent: true, skipRefreshState: true })
+      const phase = String(latestStatus.phase || latestStatus.status || '').toLowerCase()
+      if (latestStatus.connected === true || (attempt > 1 && TERMINAL_FAILURE_PHASES.has(phase))) break
+    }
     await load()
-    await refresh(row, { silent: true })
     syncSelected(row.id)
-    log(`${row.name} Cookie 刷新完成`)
-    showNotice('Cookie 刷新完成')
-  } catch(e){ error.value=e.message }
-  finally { setBusy(row.id, false) }
+    const latestRow = rows.value.find(item => item.id === row.id)
+    if (latestStatus.connected === true || latestRow?.connected === true) {
+      log(`${row.name} Cookie 重载完成，WebSocket 已恢复`)
+      showNotice(`${row.name}：Cookie 已重载，连接已恢复`)
+    } else if (latestRow?.authState === false || latestRow?.lastError) {
+      const reason = latestRow?.lastError || '保存的 Cookie 仍不可用'
+      error.value = `${row.name}：${reason}。请重新登录或更新 Cookie 后再试。`
+      log(`${row.name} 重连未恢复：${reason}`)
+    } else {
+      log(`${row.name} 重连已提交，服务端仍在处理中`)
+      showNotice(`${row.name}：已重载 Cookie，连接仍在后台处理中`)
+    }
+  } catch(e){
+    error.value = `${e.message || 'Cookie 重载失败'}；若 Cookie 已过期，请重新登录或更新 Cookie。`
+    log(`${row.name} Cookie 重载失败：${e.message || '未知错误'}`)
+  }
+  finally {
+    retryMap.value = { ...retryMap.value, [row.id]: undefined }
+    setBusy(row.id, false)
+  }
 }
 async function checkLoginAction(row){
   if (!row?.id || isBusy(row.id)) return
@@ -347,15 +380,15 @@ async function checkLoginAction(row){
     const auth = res.data?.status || {}
     patchAccountAuth(row.id, {
       cookieStatus: auth.cookieStatus,
-      authUsable: auth.usable,
-      loginStatusCode: auth.loginStatusCode,
-      loginStatusMessage: auth.loginStatusMessage,
+      authUsable: auth.usable ?? auth.authenticated ?? auth.loggedIn,
+      loginStatusCode: auth.loginStatusCode || auth.code,
+      loginStatusMessage: auth.loginStatusMessage || auth.message,
       loginCheckTime: auth.checkedAt,
     })
     await load()
     await refresh(row, { silent: true })
     syncSelected(row.id)
-    showNotice(auth.loginStatusMessage || res.data?.message || '检查完成')
+    showNotice(auth.loginStatusMessage || auth.message || res.data?.message || '检查完成')
   } catch(e){ error.value=e.message }
   finally { setBusy(row.id, false) }
 }
@@ -417,10 +450,149 @@ onBeforeUnmount(()=>{ window.removeEventListener('xya-header-action', onHeader);
 </script>
 
 <style scoped>
+.connection-stat-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.connection-stat-grid :deep(.stat-card),
+.connection-stat-grid :deep(.stat-info) {
+  min-width: 0;
+}
+
+.connection-stat-grid :deep(.stat-info span),
+.connection-stat-grid :deep(.stat-info em) {
+  white-space: nowrap;
+}
+
+.connection-drawer {
+  min-width: 0;
+}
+
+.connection-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connection-account-summary {
+  min-width: 0;
+}
+
+.connection-account-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.connection-account-copy p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.connection-account-state {
+  flex: 0 0 auto;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.connection-health {
+  align-items: stretch;
+  gap: 16px;
+  margin: 22px 0;
+}
+
+.connection-health .health-summary-card {
+  width: 150px;
+  padding: 20px 14px;
+}
+
+.connection-status-list {
+  min-width: 0;
+}
+
+.connection-status-list .connection-status-line {
+  display: grid;
+  grid-template-columns: 9px minmax(72px, auto) minmax(0, 1fr);
+  align-items: start;
+  column-gap: 9px;
+  height: auto;
+  min-height: 31px;
+  padding: 5px 0;
+}
+
+.connection-status-line i {
+  margin-top: 6px;
+}
+
+.connection-status-line b {
+  min-width: 0;
+  margin-left: 0;
+  text-align: right;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.connection-info-line {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.connection-info-line > span:first-child {
+  flex: 0 0 76px;
+}
+
+.connection-info-line > b {
+  min-width: 0;
+  flex: 1;
+  text-align: right;
+  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.connection-info-line .danger-value {
+  color: #ef4444;
+}
+
+.cookie-recovery {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 14px;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #fff7f7;
+}
+
+.cookie-recovery strong {
+  color: #dc2626;
+}
+
+.cookie-recovery p {
+  margin: 5px 0 0;
+  color: #667491;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.cookie-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.connection-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 16px 0;
+}
+
 /* === 移动端适配 (max-width: 900px) === */
 @media (max-width: 900px) {
-  /* 覆盖右侧详情操作按钮区内联 grid: repeat(2,1fr) → 单列堆叠 */
-  .grid[style*="repeat(2,1fr)"] {
+  .connection-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .connection-actions {
     grid-template-columns: minmax(0, 1fr) !important;
     margin: 12px 0 !important;
     gap: 8px !important;
@@ -466,6 +638,12 @@ onBeforeUnmount(()=>{ window.removeEventListener('xya-header-action', onHeader);
     overflow-x: auto;
     white-space: nowrap;
     -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 560px) {
+  .connection-stat-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

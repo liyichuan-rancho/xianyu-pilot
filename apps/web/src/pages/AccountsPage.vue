@@ -77,7 +77,7 @@
             <button class="link" @click="selectAccount(row.raw)">详情</button>
             <button class="link" @click="refreshProfile(row.raw.id)">刷新资料</button>
             <button class="link" @click="openRescanModal(row.raw)">重新扫码</button>
-            <button class="link" :disabled="isAccountSolving(row.raw.id)" @click="solveCaptcha(row.raw)">{{ isAccountSolving(row.raw.id) ? '求解中' : '滑块求解' }}</button>
+            <button class="link" :disabled="isAccountSolving(row.raw.id)" @click="solveCaptcha(row.raw)">{{ captchaActionLabel(row.raw, isAccountSolving(row.raw.id)) }}</button>
             <button class="link" :disabled="polishingAccountId === row.raw.id" @click="handleItemPolish(row.raw)">{{ polishingAccountId === row.raw.id ? '擦亮中...' : '一键擦亮' }}</button>
             <button class="link" :disabled="isWsBusy(row.raw.id) || row.wsConnected == null || row.wsPending" @click="toggleWs(row.raw)">{{ isWsBusy(row.raw.id) ? '确认中...' : (row.wsPending ? '启动中' : (row.wsConnected === true ? '断开' : (row.wsConnected === false ? '连接' : '状态未知'))) }}</button>
             <button class="link danger-text" @click="removeAccount(row.raw.id)">删除</button>
@@ -306,7 +306,7 @@
           @click="solveCaptcha(selected)"
         >
           <span>{{ (captchaSolving || isAccountSolving(selected.id)) ? '⏳' : '🧩' }}</span>
-          {{ (captchaSolving || isAccountSolving(selected.id)) ? '求解中' : '滑块求解' }}
+          {{ captchaActionLabel(selected, captchaSolving || isAccountSolving(selected.id)) }}
         </button>
         <button
           type="button"
@@ -376,6 +376,10 @@
       <section v-if="modal==='scan'" class="xy-modal scan-modal">
         <button class="modal-close" @click="closeModal"><Icon name="close" /></button>
         <h2>{{ qr.mode === 'rescan' ? '重新扫码更新账号' : '扫码添加闲鱼账号' }}</h2>
+        <div v-if="qr.recoveryReason" class="scan-recovery-notice" role="status">
+          <Icon name="help" />
+          <span>{{ qr.recoveryReason }}。请重新扫码；也可以改为手动更新 Cookie。</span>
+        </div>
         <div class="scan-steps">
           <div class="scan-step" :class="{ active: qrReady }"><b>1</b><span>{{ qrReady ? '二维码已生成' : '等待生成二维码' }}</span></div>
           <i></i><div class="scan-step" :class="{active: qr.status==='scanned'}"><b>2</b><span>扫码确认</span></div>
@@ -412,7 +416,11 @@
           <p>{{ qr.mode === 'rescan' ? '登录成功后会更新当前账号 Cookie，并重新同步该账号状态。' : '登录成功后将自动添加账号并刷新资料。' }}</p>
           <p>闲鱼 App 显示的登录地点由部署服务器的网络出口决定。若地点与预期不符，请取消扫码并联系当前部署的管理员核验服务器区域。</p>
         </div>
-        <div class="modal-actions"><AppButton @click="closeModal">取消</AppButton><AppButton type="primary" :loading="qr.loading" :disabled="qr.loading" @click="startQrLogin">{{ qrReady ? '刷新二维码' : '生成二维码' }}</AppButton></div>
+        <div class="modal-actions">
+          <AppButton @click="closeModal">取消</AppButton>
+          <AppButton v-if="qr.mode === 'rescan'" @click="switchScanToCookieEdit">手动更新 Cookie</AppButton>
+          <AppButton type="primary" :loading="qr.loading" :disabled="qr.loading" @click="startQrLogin">{{ qrReady ? '刷新二维码' : '生成二维码' }}</AppButton>
+        </div>
       </section>
 
       <section v-if="modal==='manual'" class="xy-modal manual-modal">
@@ -669,20 +677,6 @@
         </div>
       </section>
 
-      <section v-if="modal==='membershipBlocked'" class="xy-modal confirm-delete-modal">
-        <button class="modal-close" @click="closeModal"><Icon name="close" /></button>
-        <div class="confirm-delete-icon" style="background:#fff7e0">
-          <Icon name="help" />
-        </div>
-        <h2>无法使用手动滑块求解</h2>
-        <p class="confirm-delete-desc">{{ membershipBlockReason }}</p>
-        <p class="confirm-delete-desc">请升级到 <b>{{ membershipRequiredLevel }}</b> 会员后使用此功能。</p>
-        <div class="confirm-delete-actions">
-          <AppButton @click="closeModal">取消</AppButton>
-          <AppButton type="primary" @click="confirmMembershipUpgrade">去升级会员</AppButton>
-        </div>
-      </section>
-
       <section v-if="modal==='confirmDelete'" class="xy-modal confirm-delete-modal">
         <button class="modal-close" @click="closeModal"><Icon name="close" /></button>
         <div class="confirm-delete-icon">
@@ -702,12 +696,11 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import StatCard from '../components/StatCard.vue'; import CardPanel from '../components/CardPanel.vue'; import BaseTable from '../components/BaseTable.vue'; import Badge from '../components/Badge.vue'; import AppButton from '../components/AppButton.vue'; import Icon from '../components/Icon.vue'; import Pagination from '../components/Pagination.vue'; import EmptyState from '../components/EmptyState.vue'
 import { checkAccountAuth, deleteAccount, getAccounts, createAccountByCookie, refreshAccountProfile, updateAccountCookie, getAccountAutoRateConfig, saveAccountAutoRateConfig, getAccountStrategyConfig, saveAccountStrategyConfig, setAccountMembership } from '../api/accounts.js'
-import { startWebSocket, stopWebSocket, websocketStatus } from '../api/websocket.js'
+import { refreshCookie, startWebSocket, stopWebSocket, websocketStatus } from '../api/websocket.js'
 import { useDebouncedRef } from '../composables/useDebouncedRef.js'
 import { useCaptchaSolver } from '../composables/useCaptchaSolver.js'
 import { getSolveRecords, retrySolve } from '../api/captcha.js'
 import { polishItem } from '../api/items.js'
-import { getAccountMembership } from '../api/accounts.js'
 const emit = defineEmits(['navigate'])
 import { generateQrLogin, getQrLoginStatus, cleanupQrLogin } from '../api/qrlogin.js'
 import { accountName } from '../utils/format.js'
@@ -716,6 +709,7 @@ import { extractKeyFields, maskKeyFields, validateCookie, checkIdentity, maskVal
 import { confirmAction } from '../utils/confirmAction.js'
 import { createLatestRequestGuard, listRefreshRequestConfig } from '../utils/latestRequest.js'
 import { friendlyError } from '../utils/friendlyError.js'
+import { captchaActionLabel, requiresAccountLoginRecovery, requiresLoginRecovery } from '../utils/captchaRecovery.js'
 
 const { solveStates, solveManually, isAccountSolving, getAccountSolveStatus } = useCaptchaSolver()
 const modal = ref('')
@@ -746,7 +740,7 @@ const WS_STATUS_POLL_INTERVAL = 300
 const WS_STATUS_POLL_LIMIT = 10
 const selectedWsPending = computed(() => isWsPending(selected.value?.id))
 let qrTimer = null
-const qr = reactive({ loading:false, sessionId:'', qrUrl:'', status:'', message:'', mode:'create', accountId:null })
+const qr = reactive({ loading:false, sessionId:'', qrUrl:'', status:'', message:'', mode:'create', accountId:null, recoveryReason:'' })
 const qrReady = computed(() => Boolean(qr.sessionId && qr.qrUrl))
 const qrGenerationFailed = computed(() => qr.status === 'error')
 const qrSuccessMsg = ref('')
@@ -920,40 +914,6 @@ async function handleItemPolish(account) {
   }
 }
 
-// 会员拦截弹窗
-const membershipBlockReason = ref('')
-const membershipRequiredLevel = ref('VIP')
-async function checkMembershipBeforeSolve(account) {
-  try {
-    const res = await getAccountMembership(account.id)
-    const data = res?.data || {}
-    const level = (data.level || 'normal').toLowerCase()
-    // 简化规则：normal 用户拦截，vip/svip 放行
-    if (level === 'normal') {
-      membershipBlockReason.value = '您的会员等级未开启手动滑块求解功能'
-      membershipRequiredLevel.value = 'VIP'
-      modal.value = 'membershipBlocked'
-      return false
-    }
-    // 检查会员状态是否过期
-    if (data.status === 0) {
-      membershipBlockReason.value = '您的会员已过期，请续费后使用手动滑块求解功能'
-      membershipRequiredLevel.value = 'VIP'
-      modal.value = 'membershipBlocked'
-      return false
-    }
-    return true
-  } catch {
-    // 查询失败时不拦截（由后端兜底）
-    return true
-  }
-}
-
-function confirmMembershipUpgrade() {
-  closeModal()
-  emit('navigate', 'profile')
-}
-
 // Cookie 编辑弹窗 - 实时解析预览
 const cookieEditParsed = computed(() => {
   if (!cookieEdit.cookie.trim()) return null
@@ -1066,6 +1026,7 @@ function resetQrState() {
   qr.message = ''
   qr.mode = 'create'
   qr.accountId = null
+  qr.recoveryReason = ''
 }
 
 function openModal(type){
@@ -1095,12 +1056,23 @@ function closeModal(){
   stopQrPolling()
   resetQrState()
 }
-function openRescanModal(account) {
+function openRescanModal(account, recoveryReason = '') {
   if (!account?.id) return
+  selected.value = account
+  selectedId.value = account.id
   modal.value = 'scan'
   qr.mode = 'rescan'
   qr.accountId = account.id
+  qr.recoveryReason = recoveryReason
   startQrLogin()
+}
+
+function switchScanToCookieEdit() {
+  const account = accounts.value.find(item => item.id === qr.accountId) || selected.value
+  stopQrPolling()
+  void cleanupQrLogin()
+  resetQrState()
+  openCookieEdit(account)
 }
 
 function requireResponseObject(res, label) {
@@ -1259,9 +1231,12 @@ async function openStrategyModal(account = selected.value) {
 async function solveCaptcha(account = selected.value) {
   if (!account?.id) return
   if (captchaSolving.value) return
-  // 会员等级检查：normal 用户拦截，引导升级到 VIP
-  const allowed = await checkMembershipBeforeSolve(account)
-  if (!allowed) return
+  // 明确的会话过期无法靠滑块续期，直接进入扫码/手动 Cookie 恢复。
+  // CAPTCHA_REQUIRED 不在此分支，仍会尝试本地或远程滑块求解。
+  if (requiresAccountLoginRecovery(account)) {
+    openRescanModal(account, accountLoginHint(account) || '登录会话已失效')
+    return
+  }
   captchaSolving.value = true
   captchaMessage.value = ''
   captchaErrorMsg.value = ''
@@ -1274,12 +1249,25 @@ async function solveCaptcha(account = selected.value) {
       headless: false,
     })
     // 优先用 errorCode 映射友好提示（约束7），兜底用后端 error 文案
-    const displayMessage = friendlyError(result.errorCode || result.message, result.message)
+    const needsLoginRecovery = requiresLoginRecovery(result)
+    const displayMessage = friendlyError(
+      needsLoginRecovery ? result.message : (result.errorCode || result.message),
+      result.message,
+    )
     captchaMessage.value = displayMessage
     if (result.success) {
-      qrSuccessMsg.value = displayMessage
-      setTimeout(() => { if (qrSuccessMsg.value === displayMessage) qrSuccessMsg.value = '' }, 6000)
+      let recoveryMessage = displayMessage
+      try {
+        await refreshCookie(account.id)
+        recoveryMessage = `${displayMessage}，已触发 WebSocket 重连`
+      } catch {
+        recoveryMessage = `${displayMessage}；请点击“启动连接”完成重连`
+      }
+      qrSuccessMsg.value = recoveryMessage
+      setTimeout(() => { if (qrSuccessMsg.value === recoveryMessage) qrSuccessMsg.value = '' }, 6000)
       await loadAccounts()
+    } else if (needsLoginRecovery) {
+      openRescanModal(account, displayMessage)
     } else {
       captchaErrorMsg.value = displayMessage
       setTimeout(() => { if (captchaErrorMsg.value === displayMessage) captchaErrorMsg.value = '' }, 10000)
@@ -1788,8 +1776,15 @@ async function submitCookieEdit() {
       mH5Tk: keyFields.mH5Tk,
     })
     closeModal()
-    qrSuccessMsg.value = 'Cookie 更新成功'
-    setTimeout(() => { if (qrSuccessMsg.value === 'Cookie 更新成功') qrSuccessMsg.value = '' }, 4000)
+    let successMessage = 'Cookie 更新成功'
+    try {
+      await refreshCookie(cookieEdit.accountId)
+      successMessage = 'Cookie 更新成功，已触发 WebSocket 重连'
+    } catch {
+      successMessage = 'Cookie 更新成功；请点击“启动连接”完成重连'
+    }
+    qrSuccessMsg.value = successMessage
+    setTimeout(() => { if (qrSuccessMsg.value === successMessage) qrSuccessMsg.value = '' }, 5000)
     await loadAccounts()
   } catch (e) {
     cookieEditError.value = e.message || '更新 Cookie 失败'
@@ -1863,6 +1858,14 @@ async function checkQrStatus() {
           qrSuccessMsg.value = data.message || (data.authUsable === false
             ? (data.loginStatusMessage || '重新扫码成功，但统一登录校验未通过')
             : '账号 Cookie 已更新')
+          if (data.authUsable !== false) {
+            try {
+              await refreshCookie(Number(data.accountId))
+              qrSuccessMsg.value = '账号 Cookie 已更新，已触发 WebSocket 重连'
+            } catch {
+              qrSuccessMsg.value = '账号 Cookie 已更新；请点击“启动连接”完成重连'
+            }
+          }
         }
         if (!isRescan) {
           current.value = 1
@@ -2596,6 +2599,20 @@ onBeforeUnmount(() => {
   background: #ffebee;
   border-color: #ef9a9a;
   color: #c62828;
+}
+
+.scan-recovery-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 10px 12px;
+  border: 1px solid #ffcc80;
+  border-radius: 8px;
+  background: #fff8e8;
+  color: #b45309;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 /* 编辑账号信息 */
