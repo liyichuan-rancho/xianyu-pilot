@@ -14,10 +14,163 @@ import re
 import time
 import uuid
 from typing import Any, Optional
+from urllib.parse import parse_qs, urlparse
 
 import msgpack
 
 logger = logging.getLogger(__name__)
+
+
+_DIRECT_ORDER_ID_KEYS = {"orderid", "tradeid", "bizorderid"}
+_ORDER_URL_ID_PATH_MARKERS = (
+    "order_detail",
+    "orderdetail",
+    "idledeliver",
+    "trade_detail",
+    "tradedetail",
+)
+_MAX_ORDER_ID_SCAN_DEPTH = 16
+_MAX_ORDER_ID_SCAN_NODES = 4096
+_MAX_EMBEDDED_JSON_LENGTH = 200_000
+
+
+def _normalize_order_identifier(value: Any) -> str:
+    """Return a plausible numeric Xianyu order id, otherwise an empty string."""
+
+    if isinstance(value, bool) or value is None:
+        return ""
+    candidate = str(value).strip()
+    if not candidate.isdigit() or not 8 <= len(candidate) <= 32:
+        return ""
+    return candidate
+
+
+def _extract_order_id_from_url(value: Any) -> str:
+    """Extract an order id from an order URL without confusing item ids for it."""
+
+    text_value = str(value or "").strip()
+    if not text_value:
+        return ""
+    try:
+        parsed = urlparse(text_value)
+        query = parse_qs(parsed.query or "")
+    except (TypeError, ValueError):
+        return ""
+
+    for key, values in query.items():
+        if str(key).casefold() not in _DIRECT_ORDER_ID_KEYS:
+            continue
+        for candidate in values:
+            normalized = _normalize_order_identifier(candidate)
+            if normalized:
+                return normalized
+
+    # Some Xianyu cards use fleamarket://order_detail?id=<order id>. Only
+    # accept a generic `id` when the URL itself is explicitly order-scoped;
+    # item_detail?id=<goods id> must never be treated as an order.
+    location = f"{parsed.netloc}{parsed.path}".casefold()
+    if any(marker in location for marker in _ORDER_URL_ID_PATH_MARKERS):
+        for key, values in query.items():
+            if str(key).casefold() != "id":
+                continue
+            for candidate in values:
+                normalized = _normalize_order_identifier(candidate)
+                if normalized:
+                    return normalized
+    return ""
+
+
+def extract_order_id_from_payload(payload: Any) -> str:
+    """Find an order id in a decoded WS payload or embedded trade-card JSON.
+
+    Paid-order notifications observed in production do not always expose the
+    order id in ``reminderUrl``. Newer variants place it in a JSON string under
+    ``dxCard.item.main.*.targetUrl`` or in ``extJson.updateKey``. The bounded
+    recursive scan below supports both representations and remains deliberately
+    conservative around generic ``id`` fields.
+    """
+
+    visited: set[int] = set()
+    scanned_nodes = 0
+
+    def scan(value: Any, depth: int = 0, parent_key: str = "") -> str:
+        nonlocal scanned_nodes
+        if depth > _MAX_ORDER_ID_SCAN_DEPTH or scanned_nodes >= _MAX_ORDER_ID_SCAN_NODES:
+            return ""
+        scanned_nodes += 1
+
+        if isinstance(value, dict):
+            object_id = id(value)
+            if object_id in visited:
+                return ""
+            visited.add(object_id)
+
+            # Prefer explicit semantic fields before walking arbitrary children.
+            for key, child in value.items():
+                if str(key).casefold() in _DIRECT_ORDER_ID_KEYS:
+                    normalized = _normalize_order_identifier(child)
+                    if normalized:
+                        return normalized
+
+            for key, child in value.items():
+                key_text = str(key).casefold()
+                if key_text in {"url", "targeturl", "reminderurl", "jumpurl"}:
+                    from_url = _extract_order_id_from_url(child)
+                    if from_url:
+                        return from_url
+                if key_text == "updatekey":
+                    # Typical value: <session>:<order id>:<state>:<event>.
+                    # Current Xianyu order ids are substantially longer than
+                    # session ids, so keep this fallback strict.
+                    numeric_tokens = re.findall(r"(?<!\d)(\d{16,32})(?!\d)", str(child or ""))
+                    if numeric_tokens:
+                        return max(numeric_tokens, key=len)
+
+            for key, child in value.items():
+                nested = scan(child, depth + 1, str(key))
+                if nested:
+                    return nested
+            return ""
+
+        if isinstance(value, (list, tuple)):
+            object_id = id(value)
+            if object_id in visited:
+                return ""
+            visited.add(object_id)
+            for child in value:
+                nested = scan(child, depth + 1, parent_key)
+                if nested:
+                    return nested
+            return ""
+
+        if not isinstance(value, str):
+            return ""
+        text_value = value.strip()
+        if not text_value:
+            return ""
+
+        if parent_key.casefold() in _DIRECT_ORDER_ID_KEYS:
+            normalized = _normalize_order_identifier(text_value)
+            if normalized:
+                return normalized
+
+        from_url = _extract_order_id_from_url(text_value)
+        if from_url:
+            return from_url
+
+        if (
+            len(text_value) <= _MAX_EMBEDDED_JSON_LENGTH
+            and text_value[:1] in {"{", "["}
+            and text_value[-1:] in {"}", "]"}
+        ):
+            try:
+                decoded = json.loads(text_value)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return ""
+            return scan(decoded, depth + 1, parent_key)
+        return ""
+
+    return scan(payload)
 
 
 def _normalize_goofish_target(value: object) -> str:
@@ -582,6 +735,7 @@ def parse_numbered_fields(data: dict) -> Optional[dict]:
     msg_content = ""
     content_type = 1
     image_urls: list[str] = []
+    embedded_order_id = ""
 
     def _extract_image_urls(payload: Any) -> list[str]:
         if not isinstance(payload, dict):
@@ -667,6 +821,8 @@ def parse_numbered_fields(data: dict) -> Optional[dict]:
             ]
             for source in parsed_sources:
                 parsed_content = _decode_embedded_content(source)
+                if not embedded_order_id:
+                    embedded_order_id = extract_order_id_from_payload(parsed_content)
                 next_content_type, next_msg_content, next_image_urls = _extract_content(parsed_content)
                 if next_content_type == 2 and content_type != 2:
                     content_type = 2
@@ -784,6 +940,7 @@ def parse_numbered_fields(data: dict) -> Optional[dict]:
         "reminderUrl": str(reminder_url) if reminder_url else "",
         "receiverUserId": str(receiver) if receiver else "",
         "xyGoodsId": xy_goods_id,
+        "orderId": embedded_order_id or extract_order_id_from_payload(data),
         "imageUrl": image_urls[0] if image_urls else "",
         "imageUrls": image_urls,
     }

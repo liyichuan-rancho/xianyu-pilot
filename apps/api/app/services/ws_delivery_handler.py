@@ -23,6 +23,7 @@ from .realtime_delivery import (
     build_realtime_delivery_event_key,
 )
 from .ws_client import ws_manager
+from .ws_protocol import extract_order_id_from_payload
 
 
 logger = logging.getLogger(__name__)
@@ -150,15 +151,32 @@ _PAYMENT_NEGATIVE_KEYWORDS = (
 def extract_order_id_from_url(url: str) -> Optional[str]:
     """Extract a non-empty order identifier from a reminder URL."""
 
-    if not url:
+    return extract_order_id_from_payload({"targetUrl": url}) or None
+
+
+def extract_order_id_from_message(msg: dict[str, Any]) -> Optional[str]:
+    """Resolve an order id from normalized fields, reminder URL, or raw card data."""
+
+    if not isinstance(msg, dict):
         return None
-    query = parse_qs(urlparse(url).query or "")
-    for key in ("orderId", "tradeId", "id"):
-        for value in query.get(key) or []:
-            normalized = str(value).strip()
-            if normalized:
-                return normalized
-    return None
+    explicit_order_id = extract_order_id_from_payload(
+        {
+            "orderId": msg.get("orderId") or msg.get("order_id"),
+            "tradeId": msg.get("tradeId") or msg.get("trade_id"),
+            "bizOrderId": msg.get("bizOrderId") or msg.get("biz_order_id"),
+        }
+    )
+    if explicit_order_id:
+        return explicit_order_id
+
+    reminder_url = str(msg.get("reminderUrl") or msg.get("reminder_url") or "")
+    reminder_order_id = extract_order_id_from_url(reminder_url)
+    if reminder_order_id:
+        return reminder_order_id
+
+    raw_payload = msg.get("rawPayload") or msg.get("raw_payload")
+    nested_order_id = extract_order_id_from_payload(raw_payload if raw_payload is not None else msg)
+    return nested_order_id or None
 
 
 def extract_goods_id_from_url(url: str) -> Optional[str]:
@@ -462,7 +480,7 @@ async def _process_delivery(
 ) -> RealtimeDeliveryOutcome | None:
     session_id = str(msg.get("sId") or msg.get("sid") or "").strip()
     reminder_url = str(msg.get("reminderUrl") or msg.get("reminder_url") or "")
-    external_order_id = extract_order_id_from_url(reminder_url)
+    external_order_id = extract_order_id_from_message(msg)
     item_id = str(msg.get("xyGoodsId") or "").strip()
     if not item_id:
         item_id = extract_goods_id_from_url(reminder_url) or ""
