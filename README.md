@@ -161,6 +161,7 @@ sh ./start-local.sh
 - 国内网络加速：`PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple" PLAYWRIGHT_DOWNLOAD_HOST="https://npmmirror.com/mirrors/playwright" sh ./start-local.sh`
 - 使用 Ollama 时，裸机部署填写 `http://127.0.0.1:11434`；Docker 部署填写 `http://host.docker.internal:11434`，并确保宿主机 Ollama 允许容器访问。
 - 使用 Codex CLI / Cursor CLI 作为通用模型时，请在启动 API 与 Worker 的同一系统账号下安装并登录对应 CLI；Docker 容器默认无法直接访问宿主机 CLI。
+- 未配置完整的远程 API 环境时，通用模型默认使用本机 Codex CLI 的 `gpt-5.6-luna`；模型配置页切换到 Codex CLI 时也会自动采用该模型，无需填写 `baseUrl` 或 `apiKey`。
 
 > 本地模式仅供单机使用；公网多用户部署请使用 Docker 方式（`sh ./start.sh`）。
 

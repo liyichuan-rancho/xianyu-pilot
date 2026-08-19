@@ -48,7 +48,7 @@
             wide
             required
           >
-            <select v-model="form.generalModel.transport" class="config-input config-select">
+            <select v-model="form.generalModel.transport" class="config-input config-select" @change="onTransportChange">
               <option value="openai-compatible">OpenAI 兼容 API</option>
               <option value="ollama">本地 Ollama</option>
               <option value="codex-cli">本机 Codex CLI</option>
@@ -249,6 +249,8 @@ import AppButton from '../../components/AppButton.vue'
 import CardPanel from '../../components/CardPanel.vue'
 import SecretInput from '../../components/SecretInput.vue'
 import {
+  DEFAULT_CODEX_CLI_MODEL,
+  DEFAULT_GENERAL_MODEL_TRANSPORT,
   cloneOpenSourceConfig,
   useOpenSourceSettings,
 } from '../../composables/useOpenSourceSettings.js'
@@ -295,9 +297,9 @@ const customProvider = ref('')
 
 const form = reactive({
   generalModel: {
-    transport: API_TRANSPORT,
+    transport: DEFAULT_GENERAL_MODEL_TRANSPORT,
     provider: '',
-    modelName: '',
+    modelName: DEFAULT_CODEX_CLI_MODEL,
     baseUrl: '',
     apiKey: '',
     cliPath: '',
@@ -309,7 +311,7 @@ const form = reactive({
 })
 
 const selectedTransport = computed(
-  () => form.generalModel.transport || config.generalModel?.transport || API_TRANSPORT
+  () => form.generalModel.transport || config.generalModel?.transport || DEFAULT_GENERAL_MODEL_TRANSPORT
 )
 const isApiTransport = computed(() => selectedTransport.value === API_TRANSPORT)
 const isOllamaTransport = computed(() => selectedTransport.value === OLLAMA_TRANSPORT)
@@ -322,7 +324,7 @@ const defaultCliCommand = computed(() =>
 const modelNameMeta = computed(() => {
   if (isApiTransport.value) return '示例：gpt-4o-mini。使用代理网关时填写网关要求的模型字段。'
   if (isOllamaTransport.value) return '填写 ollama list 中显示的模型名，例如：qwen3:8b、llama3.2 或 gemma3。'
-  return 'Codex 示例：gpt-5；Cursor 示例：gpt-5 或 sonnet-4-thinking。请以当前 CLI 可用模型为准。'
+  return `Codex 默认：${DEFAULT_CODEX_CLI_MODEL}；Cursor 示例：gpt-5 或 sonnet-4-thinking。请以当前 CLI 可用模型为准。`
 })
 const modelRuntimeReady = computed(() => {
   if (!runtimeStatusAvailable.value || !runtimeStatus.generalModelConfigured) return false
@@ -381,7 +383,7 @@ onBeforeUnmount(() => {
 // 用户选中输入框后可直接输入新值，无需先删除原有内容。
 function syncForm() {
   const g = config.generalModel || {}
-  form.generalModel.transport = g.transport || API_TRANSPORT
+  form.generalModel.transport = g.transport || DEFAULT_GENERAL_MODEL_TRANSPORT
   const savedProvider = (g.provider || '').trim()
   if (savedProvider && !PROVIDER_PRESETS.some((p) => p.value === savedProvider)) {
     form.generalModel.provider = CUSTOM_PROVIDER_VALUE
@@ -398,6 +400,15 @@ function syncForm() {
   form.generalModel.requestTimeout = null
   form.generalModel.polishKeywords = ''
   form.generalModel.polishForbiddenKeywords = ''
+}
+
+function onTransportChange() {
+  if (
+    form.generalModel.transport === CODEX_CLI_TRANSPORT &&
+    !(form.generalModel.modelName || '').trim()
+  ) {
+    form.generalModel.modelName = DEFAULT_CODEX_CLI_MODEL
+  }
 }
 
 async function loadPage() {
@@ -422,7 +433,7 @@ async function save() {
 
   const payload = cloneOpenSourceConfig(config)
   const transport = selectedTransport.value
-  const previousTransport = prev.transport || API_TRANSPORT
+  const previousTransport = prev.transport || DEFAULT_GENERAL_MODEL_TRANSPORT
   const enteredModelName = (form.generalModel.modelName || '').trim()
   if (
     transport === OLLAMA_TRANSPORT &&
@@ -435,10 +446,15 @@ async function save() {
   const cliPath = isCliTransport.value
     ? ((form.generalModel.cliPath || '').trim() || (transport === previousTransport ? (prev.cliPath || '').trim() : ''))
     : (prev.cliPath || '').trim()
+  const nextModelName =
+    enteredModelName ||
+    (transport === CODEX_CLI_TRANSPORT && transport !== previousTransport
+      ? DEFAULT_CODEX_CLI_MODEL
+      : (prev.modelName || '').trim())
   payload.generalModel = {
     transport,
     provider,
-    modelName: enteredModelName || (prev.modelName || '').trim(),
+    modelName: nextModelName,
     baseUrl: pickNext(form.generalModel.baseUrl, prev.baseUrl),
     apiKey: pickNext(form.generalModel.apiKey, prev.apiKey),
     cliPath,

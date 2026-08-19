@@ -8,14 +8,39 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services import ai_provider
+from app.services import open_source_config
 from app.services.local_ai_cli import (
     CODEX_CLI_TRANSPORT,
     CURSOR_CLI_TRANSPORT,
+    DEFAULT_CODEX_CLI_MODEL,
     build_cli_command,
     normalize_model_transport,
     validate_cli_executable_config,
 )
-from app.services.open_source_config import normalize_open_source_config
+from app.services.open_source_config import default_open_source_config, normalize_open_source_config
+
+
+def test_fresh_config_defaults_to_codex_luna(monkeypatch):
+    monkeypatch.setattr(open_source_config.settings, "ai_provider_enabled", False)
+    monkeypatch.setattr(open_source_config.settings, "ai_provider_base_url", "")
+    monkeypatch.setattr(open_source_config.settings, "ai_provider_api_key", "")
+
+    config = default_open_source_config()
+
+    assert config["generalModel"]["transport"] == CODEX_CLI_TRANSPORT
+    assert config["generalModel"]["modelName"] == DEFAULT_CODEX_CLI_MODEL
+
+
+def test_complete_legacy_api_environment_keeps_api_default(monkeypatch):
+    monkeypatch.setattr(open_source_config.settings, "ai_provider_enabled", True)
+    monkeypatch.setattr(open_source_config.settings, "ai_provider_base_url", "https://api.example.com/v1")
+    monkeypatch.setattr(open_source_config.settings, "ai_provider_api_key", "sk-live")
+    monkeypatch.setattr(open_source_config.settings, "ai_provider_model", "legacy-model")
+
+    config = default_open_source_config()
+
+    assert config["generalModel"]["transport"] == "openai-compatible"
+    assert config["generalModel"]["modelName"] == "legacy-model"
 
 
 def test_normalize_open_source_config_keeps_local_cli_fields():

@@ -7,6 +7,9 @@ import {
 } from '../api/system.js'
 import { unwrap } from '../utils/apiData.js'
 
+export const DEFAULT_GENERAL_MODEL_TRANSPORT = 'codex-cli'
+export const DEFAULT_CODEX_CLI_MODEL = 'gpt-5.6-luna'
+
 export function createDefaultOpenSourceConfig() {
   return {
     siteName: '',
@@ -14,9 +17,9 @@ export function createDefaultOpenSourceConfig() {
     logoUrl: '',
     crawlerBaseUrl: '',
     generalModel: {
-      transport: 'openai-compatible',
+      transport: DEFAULT_GENERAL_MODEL_TRANSPORT,
       provider: '',
-      modelName: '',
+      modelName: DEFAULT_CODEX_CLI_MODEL,
       baseUrl: '',
       apiKey: '',
       apiKeyConfigured: false,
@@ -67,7 +70,7 @@ export function createDefaultRuntimeStatus() {
     commercialFrontendUrl: '',
     generalModelConfigured: false,
     embeddingModelConfigured: false,
-    generalModelTransport: 'openai-compatible',
+    generalModelTransport: DEFAULT_GENERAL_MODEL_TRANSPORT,
     generalModelCliAvailable: false,
     codexCliAvailable: false,
     cursorCliAvailable: false,

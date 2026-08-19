@@ -16,6 +16,8 @@ from ..core.upload_security import (
 from ..models.entities import ModelConfig, XianyuSysSetting
 from .local_ai_cli import (
     API_TRANSPORT,
+    CODEX_CLI_TRANSPORT,
+    DEFAULT_CODEX_CLI_MODEL,
     is_local_cli_transport,
     normalize_model_transport,
     validate_cli_executable_config,
@@ -120,15 +122,28 @@ def build_public_open_source_config(config: Any) -> dict[str, Any]:
 
 
 def default_open_source_config() -> dict[str, Any]:
+    # Keep a complete, explicitly enabled legacy API environment usable during
+    # upgrades. Fresh/local installs otherwise default to the already logged-in
+    # Codex CLI so they do not require a separate API endpoint or API key.
+    use_env_api_provider = bool(
+        settings.ai_provider_enabled
+        and _as_text(settings.ai_provider_base_url)
+        and _as_text(settings.ai_provider_api_key)
+        and _as_text(settings.ai_provider_model)
+    )
     return {
         "siteName": "闲鱼助手开源版",
         "icp": "",
         "logoUrl": "/xya/brand/brand_004.png",
         "crawlerBaseUrl": settings.crawler_base_url,
         "generalModel": {
-            "transport": API_TRANSPORT,
+            "transport": API_TRANSPORT if use_env_api_provider else CODEX_CLI_TRANSPORT,
             "provider": "",
-            "modelName": settings.ai_provider_model,
+            "modelName": (
+                settings.ai_provider_model
+                if use_env_api_provider
+                else DEFAULT_CODEX_CLI_MODEL
+            ),
             "baseUrl": settings.ai_provider_base_url,
             "apiKey": settings.ai_provider_api_key,
             "cliPath": "",
