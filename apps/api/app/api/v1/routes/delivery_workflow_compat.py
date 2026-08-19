@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from typing import Any, NamedTuple
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -109,6 +110,29 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, (int, float)):
         return value != 0
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _official_goofish_goods_id(value: Any) -> str:
+    """Return the item id only when it is backed by an official item URL."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return ""
+    if parsed.scheme != "https" or (parsed.hostname or "").casefold() not in {
+        "goofish.com",
+        "www.goofish.com",
+    }:
+        return ""
+    query = parse_qs(parsed.query)
+    candidate = str((query.get("id") or query.get("itemId") or [""])[0]).strip()
+    if not candidate:
+        match = re.search(r"/(\d{5,32})(?:/|$)", parsed.path)
+        candidate = match.group(1) if match else ""
+    return candidate if EXTERNAL_GOODS_ID_PATTERN.fullmatch(candidate) else ""
 
 
 def _json_loads(raw: Any, default: Any) -> Any:
@@ -2858,6 +2882,51 @@ async def sync_external_delivery_source(
     if supplied_digest and supplied_digest != digest:
         return ResultObject.validate_failed("contentSha256 与发货正文不匹配")
 
+    published_goods = body.get("publishedGoods")
+    if published_goods is not None and not isinstance(published_goods, dict):
+        return ResultObject.validate_failed("publishedGoods 必须是对象")
+    published_goods = dict(published_goods or {})
+    published_item_url = str(published_goods.get("itemUrl") or "").strip()
+    if published_goods:
+        evidence_goods_id = _official_goofish_goods_id(published_item_url)
+        if not evidence_goods_id or evidence_goods_id != external_goods_id:
+            return ResultObject.validate_failed(
+                "publishedGoods.itemUrl 必须是与 externalGoodsId 一致的闲鱼官方商品链接"
+            )
+    published_title = str(published_goods.get("title") or title).strip()
+    raw_published_price = published_goods.get("price")
+    published_price = (
+        "" if raw_published_price in (None, "") else str(raw_published_price).strip()
+    )
+    published_description = str(published_goods.get("description") or "").strip()
+    published_category = str(published_goods.get("category") or "").strip()
+    if len(published_title) > 500:
+        return ResultObject.validate_failed("publishedGoods.title 不能超过 500 字")
+    if len(published_price) > 50:
+        return ResultObject.validate_failed("publishedGoods.price 格式无效")
+    if len(published_description) > 50_000:
+        return ResultObject.validate_failed("publishedGoods.description 不能超过 50000 字")
+    if len(published_category) > 100:
+        return ResultObject.validate_failed("publishedGoods.category 不能超过 100 字")
+
+    if published_goods:
+        account = (
+            await db.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM xianyu_account
+                    WHERE id = :account_id AND deleted = 0
+                    LIMIT 1
+                    FOR UPDATE
+                    """
+                ),
+                {"account_id": account_id},
+            )
+        ).mappings().first()
+        if not account:
+            return ResultObject.failed("xianyu-pilot 中未找到对应闲鱼账号", code=404)
+
     goods_rows = (
         await db.execute(
             text(
@@ -2876,9 +2945,52 @@ async def sync_external_delivery_source(
             {"account_id": account_id, "external_goods_id": external_goods_id},
         )
     ).mappings().all()
+    goods_registered = False
+    if not goods_rows and published_goods:
+        await db.execute(
+            text(
+                """
+                INSERT INTO xianyu_goods(
+                    account_id, goods_id, external_goods_id, title, price, sold_price,
+                    detail_url, detail_info, description, category, stock, quantity,
+                    status, deleted, created_time, updated_time
+                )
+                VALUES(
+                    :account_id, :external_goods_id, :external_goods_id, :title, :price, :price,
+                    :detail_url, :description, :description, :category, 999, 999,
+                    1, 0, NOW(), NOW()
+                )
+                """
+            ),
+            {
+                "account_id": account_id,
+                "external_goods_id": external_goods_id,
+                "title": published_title,
+                "price": published_price,
+                "detail_url": published_item_url,
+                "description": published_description,
+                "category": published_category,
+            },
+        )
+        registered_goods_id = _to_int(
+            (await db.execute(text("SELECT LAST_INSERT_ID()"))).scalar()
+        )
+        if registered_goods_id <= 0:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail="登记已发布商品后未取得商品 ID")
+        goods_rows = [
+            {
+                "id": registered_goods_id,
+                "account_id": account_id,
+                "external_goods_id": external_goods_id,
+                "goods_id": external_goods_id,
+                "title": published_title,
+            }
+        ]
+        goods_registered = True
     if not goods_rows:
         return ResultObject.failed(
-            "xianyu-pilot 中未找到该账号下的闲鱼商品，请先同步商品列表",
+            "xianyu-pilot 中未找到该账号下的闲鱼商品，且请求未携带可验证的发布结果",
             code=404,
         )
     goods = dict(goods_rows[0])
@@ -2992,6 +3104,7 @@ async def sync_external_delivery_source(
             "enabled": enabled,
             "autoConfirmShipment": auto_confirm_shipment,
             "timing": "payDelivery",
+            "goodsRegistered": goods_registered,
         },
         "发货文案已同步到货源库并绑定商品",
     )

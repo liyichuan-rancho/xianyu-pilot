@@ -12,7 +12,10 @@ import pytest
 os.environ["APP_ENV"] = "test"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.api.v1.routes.delivery_workflow_compat import sync_external_delivery_source
+from app.api.v1.routes.delivery_workflow_compat import (
+    _official_goofish_goods_id,
+    sync_external_delivery_source,
+)
 from app.migrations import discover_migrations, split_sql_script
 
 
@@ -45,7 +48,9 @@ class _FakeSession:
         self.rolled_back = False
         self.saved_config: dict[str, Any] | None = None
 
-    async def execute(self, statement: Any, params: dict[str, Any] | None = None) -> _Result:
+    async def execute(
+        self, statement: Any, params: dict[str, Any] | None = None
+    ) -> _Result:
         sql = str(statement)
         params = params or {}
         if "FROM xianyu_goods g" in sql:
@@ -80,6 +85,40 @@ class _FakeSession:
 
     async def rollback(self) -> None:
         self.rolled_back = True
+
+
+class _RegisteringSession(_FakeSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.goods_registered = False
+        self._last_insert_id = 0
+
+    async def execute(self, statement: Any, params: dict[str, Any] | None = None) -> _Result:
+        sql = str(statement)
+        params = params or {}
+        if "FROM xianyu_goods g" in sql:
+            return _Result(rows=[])
+        if "FROM xianyu_account" in sql:
+            return _Result(rows=[{"id": 7}])
+        if "INSERT INTO xianyu_goods" in sql:
+            self.goods_registered = True
+            self._last_insert_id = 42
+            return _Result()
+        if "WHERE external_system = :external_system" in sql:
+            return _Result()
+        if "INSERT INTO delivery_text_source" in sql:
+            self._last_insert_id = 99
+            return _Result()
+        if "SELECT LAST_INSERT_ID()" in sql:
+            return _Result(scalar_value=self._last_insert_id)
+        if "FROM delivery_goods_config" in sql:
+            return _Result()
+        if "FROM delivery_rule" in sql:
+            return _Result()
+        if "INSERT INTO delivery_goods_config" in sql:
+            self.saved_config = json.loads(str(params["config_json"]))
+            return _Result()
+        raise AssertionError(f"unexpected SQL: {sql}")
 
 
 def test_external_source_migration_is_discovered_and_parseable() -> None:
@@ -120,6 +159,7 @@ async def test_sync_endpoint_upserts_source_and_enables_pay_delivery() -> None:
         "enabled": True,
         "autoConfirmShipment": True,
         "timing": "payDelivery",
+        "goodsRegistered": False,
     }
     assert db.committed is True
     assert db.rolled_back is False
@@ -133,3 +173,44 @@ async def test_sync_endpoint_upserts_source_and_enables_pay_delivery() -> None:
         "content": content,
         "autoConfirmShipment": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_sync_endpoint_registers_verified_published_goods_without_full_store_sync() -> None:
+    db = _RegisteringSession()
+    content = "百度网盘：https://example.test/share"
+
+    response = await sync_external_delivery_source(
+        body={
+            "accountId": 7,
+            "externalGoodsId": "1234567890123",
+            "sourceKey": "xpm-delivery-source-v1:7:1234567890123",
+            "title": "批量资料产品",
+            "content": content,
+            "publishedGoods": {
+                "itemUrl": "https://www.goofish.com/item?id=1234567890123",
+                "title": "批量资料产品",
+                "price": 4.99,
+                "description": "产品介绍",
+                "category": "电子资料",
+            },
+        },
+        db=db,
+        _={},
+    )
+
+    assert response.code == 200
+    assert response.data["goodsId"] == 42
+    assert response.data["goodsRegistered"] is True
+    assert db.goods_registered is True
+    assert db.committed is True
+
+
+def test_published_goods_registration_requires_matching_official_item_url() -> None:
+    assert (
+        _official_goofish_goods_id(
+            "https://www.goofish.com/item?id=1234567890123"
+        )
+        == "1234567890123"
+    )
+    assert _official_goofish_goods_id("https://example.com/item?id=1234567890123") == ""

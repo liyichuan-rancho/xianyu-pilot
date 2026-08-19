@@ -256,7 +256,9 @@ Windows 使用 `.\start.bat`，参数相同。
 
 ### 鱼料台货源同步接口
 
-`POST /api/integrations/xianyu-product-management/delivery-sources/sync` 使用与后台相同的管理员 Bearer 鉴权。调用方提供账号 ID、闲鱼商品 ID、稳定 `sourceKey`、标题、正文和可选 SHA-256 指纹；接口会在一个事务中幂等新增或更新文本货源、绑定已同步商品的 `payDelivery` 配置，并按请求开启自动发货与自动确认发货。商品必须先存在于 xianyu-pilot；正文为空、指纹不匹配、商品不存在或稳定键已属于其他商品时不会写入部分配置。
+`POST /api/integrations/xianyu-product-management/delivery-sources/sync` 使用与后台相同的管理员 Bearer 鉴权。调用方提供账号 ID、闲鱼商品 ID、稳定 `sourceKey`、标题、正文和可选 SHA-256 指纹；接口会在一个事务中幂等新增或更新文本货源、绑定商品的 `payDelivery` 配置，并按请求开启自动发货与自动确认发货。
+
+鱼料台刚发布的新商品可以附带 `publishedGoods`（`itemUrl`、标题、价格、介绍、分类）。接口只接受商品 ID 与 `https://www.goofish.com/...` 官方商品链接完全一致的发布证据；验证通过后会在同一事务中登记商品，无需为每件新商品执行一次全量店铺同步。未携带发布证据时仍只绑定 xianyu-pilot 中已经存在的商品。正文为空、指纹不匹配、商品不存在、官方链接与商品 ID 不一致或稳定键已属于其他商品时不会写入部分配置。
 
 升级本地源码部署时使用 `sh ./start.sh --build`，Compose 会自动执行 `046_external_delivery_source_sync.sql`。裸机开发先在 `apps/api` 目录执行 `python -m app.migrations upgrade`。
 
