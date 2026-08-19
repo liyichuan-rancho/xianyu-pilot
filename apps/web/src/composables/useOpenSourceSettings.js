@@ -21,6 +21,7 @@ export function createDefaultOpenSourceConfig() {
       apiKey: '',
       apiKeyConfigured: false,
       cliPath: '',
+      ollamaUrl: 'http://127.0.0.1:11434',
       requestTimeout: 15,
       polishKeywords: '',
       polishForbiddenKeywords: '',
@@ -70,6 +71,8 @@ export function createDefaultRuntimeStatus() {
     generalModelCliAvailable: false,
     codexCliAvailable: false,
     cursorCliAvailable: false,
+    ollamaAvailable: false,
+    ollamaVersion: '',
   }
 }
 
@@ -92,6 +95,7 @@ export function normalizeOpenSourceConfig(config = {}) {
       apiKey: String(generalModel.apiKey || defaults.generalModel.apiKey),
       apiKeyConfigured: Boolean(generalModel.apiKeyConfigured || generalModel.apiKey),
       cliPath: String(generalModel.cliPath || defaults.generalModel.cliPath),
+      ollamaUrl: String(generalModel.ollamaUrl || defaults.generalModel.ollamaUrl),
       requestTimeout: Number(generalModel.requestTimeout || defaults.generalModel.requestTimeout) || 15,
       polishKeywords: String(generalModel.polishKeywords || defaults.generalModel.polishKeywords),
       polishForbiddenKeywords: String(

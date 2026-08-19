@@ -21,6 +21,12 @@ from app.services.local_ai_cli import (
     validate_cli_executable_config,
 )
 from app.services.open_source_config import load_open_source_config_from_store
+from app.services.ollama_runtime import (
+    OLLAMA_TRANSPORT,
+    OllamaRuntimeError,
+    generate_text_with_ollama,
+    is_ollama_configured,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +89,8 @@ def is_ai_configured(config: Optional[Dict[str, Any]]) -> bool:
         config.get("transport") or config.get("accessMode"),
         config.get("provider") or config.get("providerName"),
     )
+    if transport == OLLAMA_TRANSPORT:
+        return is_ollama_configured(config)
     if is_local_cli_transport(transport):
         try:
             validate_cli_executable_config(
@@ -137,6 +145,7 @@ async def _load_chat_model_config_from_db() -> Optional[Dict[str, Any]]:
             "baseUrl": str(general_model.get("baseUrl") or "").strip(),
             "apiKey": str(general_model.get("apiKey") or "").strip(),
             "cliPath": str(general_model.get("cliPath") or "").strip(),
+            "ollamaUrl": str(general_model.get("ollamaUrl") or "").strip(),
             "requestTimeout": int(general_model.get("requestTimeout") or settings.ai_provider_timeout_seconds or 30),
             "polishKeywords": str(general_model.get("polishKeywords") or "").strip(),
             "polishForbiddenKeywords": str(general_model.get("polishForbiddenKeywords") or "").strip(),
@@ -148,6 +157,7 @@ async def _load_chat_model_config_from_db() -> Optional[Dict[str, Any]]:
             "apiKey": merged["apiKey"],
             "modelName": merged["modelName"],
             "cliPath": merged["cliPath"],
+            "ollamaUrl": merged["ollamaUrl"],
         })
 
         if not any(merged.values()):
@@ -185,6 +195,17 @@ async def _resolve_ai_config() -> Dict[str, Any]:
         api_key = str(db_config.get("apiKey") or "").strip()
         model = str(db_config.get("modelName") or db_config.get("realModel") or "").strip()
         enabled = bool(db_config.get("enabled", True))
+        if transport == OLLAMA_TRANSPORT:
+            return {
+                "transport": transport,
+                "ollama_url": str(db_config.get("ollamaUrl") or "").strip(),
+                "base_url": "",
+                "api_key": "",
+                "model": model,
+                "enabled": enabled,
+                "source": "settings",
+                "request_timeout": int(db_config.get("requestTimeout") or settings.ai_provider_timeout_seconds or 30),
+            }
         if is_local_cli_transport(transport):
             return {
                 "transport": transport,
@@ -391,6 +412,32 @@ async def generate_text(
         "temperature": temperature,
         "messages": messages,
     }
+
+    if transport == OLLAMA_TRANSPORT:
+        try:
+            ollama_result = await generate_text_with_ollama(
+                base_url=cfg.get("ollama_url"),
+                model=cfg["model"],
+                messages=messages,
+                temperature=temperature,
+                timeout_seconds=int(cfg.get("request_timeout") or 30),
+            )
+            result.update(
+                {
+                    "ok": True,
+                    "content": ollama_result["content"],
+                    "usage": ollama_result.get("usage") or {},
+                }
+            )
+            return result
+        except OllamaRuntimeError as exc:
+            logger.warning("Ollama request failed")
+            result.update({"ok": False, "error": str(exc)})
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Ollama request failed unexpectedly: kind=%s", exc.__class__.__name__)
+            result.update({"ok": False, "error": "Ollama 调用失败"})
+            return result
 
     if is_local_cli_transport(transport):
         try:

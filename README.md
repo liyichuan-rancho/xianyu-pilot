@@ -82,7 +82,7 @@
 - 📝 **操作日志** — 审计留痕、保留期管理
 - 🔔 **通知渠道** — 持久化防重复测试发送，未知结果只能人工确认关闭
 - 📚 **RAG 知识库** — 向量检索增强回复
-- ⚙️ **系统配置** — 通用模型支持 OpenAI 兼容 API、本机 Codex CLI 与 Cursor CLI（模型可配置），并统一管理向量模型、RAG、商业版桥接状态
+- ⚙️ **系统配置** — 通用模型支持 OpenAI 兼容 API、本地 Ollama、本机 Codex CLI 与 Cursor CLI（模型可配置），并统一管理向量模型、RAG、商业版桥接状态
 - 🧩 **滑块求解（商业级 · 领先所有开源项目）** — 三种模拟轨迹方案轮换（最小急动度物理模型 / 容器内多策略 / 超出容器偏移），**完全本地算法驱动、无需借助任何外部 API**，实测本地成功率高达 **70%+**，支持 Windows / Linux / Ubuntu / Docker 全平台，求解能力与线上商业版完全一致；本地浏览器 + 远程 API 双通道，同账号 10 分钟内跨模块去重防重复扣费
 - 🏠 **首页运营** — 轮播、公告、文字广告、广告申请（含在线支付）、关于我们、更新日志
 - 🔗 **反馈建议** — 商业版桥接优先 + 本地兜底
@@ -159,6 +159,7 @@ sh ./start-local.sh
 - 管理命令：`sh ./status-local.sh` / `sh ./stop-local.sh`（Windows 用 `status-local.bat` / `stop-local.bat`）
 - MySQL root 有密码时：`MYSQL_ROOT_PASSWORD="你的密码" sh ./start-local.sh`
 - 国内网络加速：`PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple" PLAYWRIGHT_DOWNLOAD_HOST="https://npmmirror.com/mirrors/playwright" sh ./start-local.sh`
+- 使用 Ollama 时，裸机部署填写 `http://127.0.0.1:11434`；Docker 部署填写 `http://host.docker.internal:11434`，并确保宿主机 Ollama 允许容器访问。
 - 使用 Codex CLI / Cursor CLI 作为通用模型时，请在启动 API 与 Worker 的同一系统账号下安装并登录对应 CLI；Docker 容器默认无法直接访问宿主机 CLI。
 
 > 本地模式仅供单机使用；公网多用户部署请使用 Docker 方式（`sh ./start.sh`）。

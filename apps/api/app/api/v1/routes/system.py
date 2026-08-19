@@ -17,6 +17,7 @@ from ....models.entities import (
 )
 from ....services.ai_provider import invalidate_model_config_cache, is_ai_configured
 from ....services.local_ai_cli import cli_runtime_status
+from ....services.ollama_runtime import DEFAULT_OLLAMA_BASE_URL, probe_ollama
 from ....services.commercial_bridge import (
     default_about_content,
     get_commercial_bridge_runtime,
@@ -387,6 +388,9 @@ async def get_runtime_status(
 
     general_model = (config or {}).get("generalModel") or {}
     embedding_model = (config or {}).get("embeddingModel") or {}
+    ollama_status = await probe_ollama(
+        general_model.get("ollamaUrl") or DEFAULT_OLLAMA_BASE_URL
+    )
     status = {
         "dbConnected": db_connected,
         "dbVersion": db_version,
@@ -408,6 +412,8 @@ async def get_runtime_status(
         "commercialFrontendUrl": commercial_runtime.get("commercialFrontendUrl") or "",
         "generalModelConfigured": is_ai_configured(general_model),
         "embeddingModelConfigured": is_ai_configured(embedding_model),
+        "ollamaAvailable": bool(ollama_status.get("available")),
+        "ollamaVersion": str(ollama_status.get("version") or ""),
     }
     status.update(
         cli_runtime_status(

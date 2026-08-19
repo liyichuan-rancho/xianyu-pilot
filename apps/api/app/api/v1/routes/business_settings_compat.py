@@ -21,7 +21,7 @@ from ....services.business_settings import (
 from ..deps import get_current_user
 
 router = APIRouter(tags=["businessSettingsCompat"])
-AI_SETTINGS_HINT = "未配置通用模型，请先前往系统设置中的“模型配置”选择 API 或本机 CLI，并填写对应参数。"
+AI_SETTINGS_HINT = "未配置通用模型，请先前往系统设置中的“模型配置”选择 API、本地 Ollama 或本机 CLI，并填写对应参数。"
 
 
 def _format_datetime(value: Optional[datetime.datetime]) -> Optional[str]:

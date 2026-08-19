@@ -7,7 +7,7 @@
       <div class="page-hero-copy">
         <span class="page-pill">General Model</span>
         <h1>模型配置</h1>
-        <p>通用模型用于接待回复、文本生成、商品改写等场景，可选择远程 API 或本机 Codex / Cursor CLI。</p>
+        <p>通用模型用于接待回复、文本生成、商品改写等场景，可选择远程 API、本地 Ollama 或本机 Codex / Cursor CLI。</p>
 
         <div class="page-actions">
           <AppButton type="primary" :loading="saving" :disabled="!configAvailable" @click="save">保存配置</AppButton>
@@ -35,25 +35,29 @@
           <article class="overview-card">
             <span>填写原则</span>
             <strong>先选择调用方式，再确认运行环境</strong>
-            <p>远程 API 需要地址和 Key；本机 CLI 需要后端进程能找到命令，并已使用同一系统账号完成登录。</p>
+            <p>远程 API 需要地址和 Key；Ollama 需要本地服务和已下载模型；本机 CLI 需要后端进程能找到命令并已登录。</p>
           </article>
         </div>
 
         <div class="field-grid two">
           <AdminConfigField
             label="调用方式"
-            hint="可使用 OpenAI 兼容 API，也可复用本机已登录的 Codex CLI 或 Cursor CLI。"
-            meta="CLI 由后端进程直接启动，不需要在这里填写 API Key；模型名称仍可自行指定。"
+            hint="可使用 OpenAI 兼容 API、本地 Ollama，也可复用本机已登录的 Codex CLI 或 Cursor CLI。"
+            meta="Ollama 与 CLI 模式不需要填写 API Key；模型名称仍可自行指定。"
             badge="第一步"
             wide
             required
           >
             <select v-model="form.generalModel.transport" class="config-input config-select">
               <option value="openai-compatible">OpenAI 兼容 API</option>
+              <option value="ollama">本地 Ollama</option>
               <option value="codex-cli">本机 Codex CLI</option>
               <option value="cursor-cli">本机 Cursor CLI</option>
             </select>
             <div v-if="runtimeStatusAvailable" class="cli-detection-row">
+              <span :class="runtimeStatus.ollamaAvailable ? 'available' : ''">
+                Ollama：{{ runtimeStatus.ollamaAvailable ? `可用${runtimeStatus.ollamaVersion ? ` · ${runtimeStatus.ollamaVersion}` : ''}` : '未连接' }}
+              </span>
               <span :class="runtimeStatus.codexCliAvailable ? 'available' : ''">
                 Codex CLI：{{ runtimeStatus.codexCliAvailable ? '已检测到' : '未检测到' }}
               </span>
@@ -86,13 +90,33 @@
 
           <AdminConfigField
             label="模型名称"
-            hint="系统会把这个名称传给所选 API 或 CLI，可按你的账号权限和本机配置自行填写。"
-            :meta="isApiTransport ? '示例：gpt-4o-mini。使用代理网关时填写网关要求的模型字段。' : 'Codex 示例：gpt-5；Cursor 示例：gpt-5 或 sonnet-4-thinking。请以当前 CLI 可用模型为准。'"
+            hint="系统会把这个名称传给所选调用方式，可按你的账号权限或本地模型自行填写。"
+            :meta="modelNameMeta"
             badge="核心参数"
             required
           >
             <input v-model="form.generalModel.modelName" class="config-input" :placeholder="config.generalModel.modelName || 'gpt-4o-mini'" />
           </AdminConfigField>
+
+          <AdminConfigField
+            v-if="isOllamaTransport"
+            label="Ollama 服务地址"
+            hint="裸机部署通常使用 http://127.0.0.1:11434；Docker 部署使用 http://host.docker.internal:11434。"
+            meta="仅允许本机回环地址或 host.docker.internal，不会读取系统代理，也不会跟随重定向。"
+            badge="本地服务"
+            required
+          >
+            <input
+              v-model="form.generalModel.ollamaUrl"
+              class="config-input"
+              :placeholder="config.generalModel.ollamaUrl || DEFAULT_OLLAMA_URL"
+            />
+          </AdminConfigField>
+
+          <div v-if="isOllamaTransport" class="cli-runtime-notice ollama-notice field-wide">
+            <strong>请先启动 Ollama 并下载模型</strong>
+            <p>例如执行 <code>ollama pull qwen3:8b</code> 后，将“模型名称”填写为 <code>qwen3:8b</code>。Docker 部署还需让宿主机 Ollama 对容器可访问。</p>
+          </div>
 
           <AdminConfigField
             v-if="isApiTransport"
@@ -186,7 +210,7 @@
             <div class="guide-icon">A</div>
             <div>
               <strong>优先保证基础调用通</strong>
-              <p>API 模式检查地址与 Key；CLI 模式检查命令可见、账号已登录，并确认模型名可用。</p>
+              <p>API 模式检查地址与 Key；Ollama 检查服务与本地模型；CLI 模式检查命令可见及账号登录状态。</p>
             </div>
           </article>
           <article class="guide-card">
@@ -208,6 +232,7 @@
         <ul class="hint-list">
           <li>通用模型负责站内大部分文本生成能力，和向量模型（Embedding）不是同一个用途。</li>
           <li>如果 API 模式保存后仍报错，先检查接口地址、模型名以及 Key 是否匹配。</li>
+          <li>如果 Ollama 模式不可用，请先执行 <code>ollama serve</code> 和 <code>ollama list</code>，并确认模型已下载。</li>
           <li>如果 CLI 模式不可用，请在运行后端的系统账号下执行 <code>codex --version</code> 或 <code>cursor-agent --version</code> 排查 PATH，并确认已经登录。</li>
           <li>如使用代理网关，请直接在“模型名称”中填写网关要求的模型字段，避免同一配置出现两个名称。</li>
           <li>建议为生产环境单独准备一套 API Key，避免与个人测试或其他项目混用，降低排查成本。</li>
@@ -247,8 +272,10 @@ const {
 // 供应商下拉选项：预置常见厂商 + “其他 / 自定义”
 const CUSTOM_PROVIDER_VALUE = '__custom__'
 const API_TRANSPORT = 'openai-compatible'
+const OLLAMA_TRANSPORT = 'ollama'
 const CODEX_CLI_TRANSPORT = 'codex-cli'
 const CURSOR_CLI_TRANSPORT = 'cursor-cli'
+const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434'
 const PROVIDER_PRESETS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'deepseek', label: 'DeepSeek 深度求索' },
@@ -274,6 +301,7 @@ const form = reactive({
     baseUrl: '',
     apiKey: '',
     cliPath: '',
+    ollamaUrl: DEFAULT_OLLAMA_URL,
     requestTimeout: null,
     polishKeywords: '',
     polishForbiddenKeywords: '',
@@ -284,20 +312,30 @@ const selectedTransport = computed(
   () => form.generalModel.transport || config.generalModel?.transport || API_TRANSPORT
 )
 const isApiTransport = computed(() => selectedTransport.value === API_TRANSPORT)
+const isOllamaTransport = computed(() => selectedTransport.value === OLLAMA_TRANSPORT)
 const isCliTransport = computed(() =>
   [CODEX_CLI_TRANSPORT, CURSOR_CLI_TRANSPORT].includes(selectedTransport.value)
 )
 const defaultCliCommand = computed(() =>
   selectedTransport.value === CODEX_CLI_TRANSPORT ? 'codex' : 'cursor-agent'
 )
+const modelNameMeta = computed(() => {
+  if (isApiTransport.value) return '示例：gpt-4o-mini。使用代理网关时填写网关要求的模型字段。'
+  if (isOllamaTransport.value) return '填写 ollama list 中显示的模型名，例如：qwen3:8b、llama3.2 或 gemma3。'
+  return 'Codex 示例：gpt-5；Cursor 示例：gpt-5 或 sonnet-4-thinking。请以当前 CLI 可用模型为准。'
+})
 const modelRuntimeReady = computed(() => {
   if (!runtimeStatusAvailable.value || !runtimeStatus.generalModelConfigured) return false
+  if (runtimeStatus.generalModelTransport === OLLAMA_TRANSPORT) return runtimeStatus.ollamaAvailable
   if (![CODEX_CLI_TRANSPORT, CURSOR_CLI_TRANSPORT].includes(runtimeStatus.generalModelTransport)) return true
   return runtimeStatus.generalModelCliAvailable
 })
 const modelRuntimeLabel = computed(() => {
   if (!runtimeStatusAvailable.value) return '状态未知'
   if (!runtimeStatus.generalModelConfigured) return '未设置'
+  if (runtimeStatus.generalModelTransport === OLLAMA_TRANSPORT && !runtimeStatus.ollamaAvailable) {
+    return 'Ollama 不可用'
+  }
   if (
     [CODEX_CLI_TRANSPORT, CURSOR_CLI_TRANSPORT].includes(runtimeStatus.generalModelTransport) &&
     !runtimeStatus.generalModelCliAvailable
@@ -306,6 +344,7 @@ const modelRuntimeLabel = computed(() => {
 })
 const modelRuntimeDescription = computed(() => {
   if (!runtimeStatusAvailable.value) return '对话 / 改写 / 文本生成'
+  if (runtimeStatus.generalModelTransport === OLLAMA_TRANSPORT) return '本地 Ollama'
   if (runtimeStatus.generalModelTransport === CODEX_CLI_TRANSPORT) return '本机 Codex CLI'
   if (runtimeStatus.generalModelTransport === CURSOR_CLI_TRANSPORT) return '本机 Cursor CLI'
   return 'OpenAI 兼容 API'
@@ -355,6 +394,7 @@ function syncForm() {
   form.generalModel.baseUrl = ''
   form.generalModel.apiKey = ''
   form.generalModel.cliPath = ''
+  form.generalModel.ollamaUrl = g.ollamaUrl || DEFAULT_OLLAMA_URL
   form.generalModel.requestTimeout = null
   form.generalModel.polishKeywords = ''
   form.generalModel.polishForbiddenKeywords = ''
@@ -383,16 +423,26 @@ async function save() {
   const payload = cloneOpenSourceConfig(config)
   const transport = selectedTransport.value
   const previousTransport = prev.transport || API_TRANSPORT
+  const enteredModelName = (form.generalModel.modelName || '').trim()
+  if (
+    transport === OLLAMA_TRANSPORT &&
+    transport !== previousTransport &&
+    !enteredModelName
+  ) {
+    error.value = '切换到 Ollama 后，请填写 ollama list 中已下载的本地模型名称。'
+    return
+  }
   const cliPath = isCliTransport.value
     ? ((form.generalModel.cliPath || '').trim() || (transport === previousTransport ? (prev.cliPath || '').trim() : ''))
     : (prev.cliPath || '').trim()
   payload.generalModel = {
     transport,
     provider,
-    modelName: pickNext(form.generalModel.modelName, prev.modelName),
+    modelName: enteredModelName || (prev.modelName || '').trim(),
     baseUrl: pickNext(form.generalModel.baseUrl, prev.baseUrl),
     apiKey: pickNext(form.generalModel.apiKey, prev.apiKey),
     cliPath,
+    ollamaUrl: pickNext(form.generalModel.ollamaUrl, prev.ollamaUrl || DEFAULT_OLLAMA_URL),
     requestTimeout:
       Number(form.generalModel.requestTimeout) ||
       Number(prev.requestTimeout) ||
@@ -622,6 +672,18 @@ function onHeaderAction(event) {
   color: #60738e;
   font-size: 12.5px;
   line-height: 1.7;
+}
+
+.ollama-notice {
+  border-color: rgba(22, 121, 74, 0.22);
+  background: linear-gradient(135deg, #f4fcf7, #edf9f1);
+}
+
+.cli-runtime-notice code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.8);
+  color: #245f42;
 }
 
 .hint-list code {

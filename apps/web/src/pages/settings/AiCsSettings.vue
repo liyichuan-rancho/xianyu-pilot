@@ -262,7 +262,7 @@
           </div>
 
           <div v-if="testConfigured === false" class="aics-warn-box">
-            <p class="aics-warn">AI 模型未配置，请先到「系统设置 / 模型配置」选择 API 或本机 CLI，并填写对应参数。</p>
+            <p class="aics-warn">AI 模型未配置，请先到「系统设置 / 模型配置」选择 API、本地 Ollama 或本机 CLI，并填写对应参数。</p>
             <button type="button" class="aics-retry-btn" @click="goToModelConfig">前往模型配置</button>
           </div>
         </CardPanel>

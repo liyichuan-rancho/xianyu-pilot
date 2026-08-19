@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .ollama_runtime import OLLAMA_TRANSPORT
+
 
 API_TRANSPORT = "openai-compatible"
 CODEX_CLI_TRANSPORT = "codex-cli"
@@ -56,6 +58,8 @@ def normalize_model_transport(value: Any, provider: Any = "") -> str:
         "api": API_TRANSPORT,
         "openai": API_TRANSPORT,
         "openai-compatible": API_TRANSPORT,
+        "ollama": OLLAMA_TRANSPORT,
+        "ollama-local": OLLAMA_TRANSPORT,
         "codex": CODEX_CLI_TRANSPORT,
         "codex-cli": CODEX_CLI_TRANSPORT,
         "cursor": CURSOR_CLI_TRANSPORT,

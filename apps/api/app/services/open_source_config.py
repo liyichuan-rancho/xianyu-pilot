@@ -20,6 +20,11 @@ from .local_ai_cli import (
     normalize_model_transport,
     validate_cli_executable_config,
 )
+from .ollama_runtime import (
+    DEFAULT_OLLAMA_BASE_URL,
+    OLLAMA_TRANSPORT,
+    normalize_ollama_base_url,
+)
 from .sensitive_config import (
     MODEL_CONFIG_API_KEY_PURPOSE,
     decrypt_runtime_secret,
@@ -127,6 +132,7 @@ def default_open_source_config() -> dict[str, Any]:
             "baseUrl": settings.ai_provider_base_url,
             "apiKey": settings.ai_provider_api_key,
             "cliPath": "",
+            "ollamaUrl": DEFAULT_OLLAMA_BASE_URL,
             "requestTimeout": settings.ai_provider_timeout_seconds,
             "polishKeywords": "",
             "polishForbiddenKeywords": "",
@@ -175,6 +181,8 @@ def normalize_open_source_config(payload: Any) -> dict[str, Any]:
             "baseUrl": _as_text(general_payload.get("baseUrl")) or general_defaults["baseUrl"],
             "apiKey": _as_text(general_payload.get("apiKey")) or general_defaults["apiKey"],
             "cliPath": _as_text(general_payload.get("cliPath")),
+            "ollamaUrl": _as_text(general_payload.get("ollamaUrl"))
+            or general_defaults["ollamaUrl"],
             "requestTimeout": _as_int(
                 general_payload.get("requestTimeout"),
                 general_defaults["requestTimeout"],
@@ -324,10 +332,14 @@ async def save_open_source_config(db: AsyncSession, payload: Any) -> dict[str, A
             general_transport,
             config["generalModel"].get("cliPath"),
         )
+    if general_transport == OLLAMA_TRANSPORT or "ollamaUrl" in raw_sections["generalModel"]:
+        config["generalModel"]["ollamaUrl"] = normalize_ollama_base_url(
+            config["generalModel"].get("ollamaUrl")
+        )
     for section in ("generalModel", "embeddingModel"):
         values = config[section]
         raw_values = raw_sections[section]
-        if section == "generalModel" and is_local_cli_transport(general_transport):
+        if section == "generalModel" and general_transport != API_TRANSPORT:
             continue
         if "baseUrl" not in raw_values:
             continue
