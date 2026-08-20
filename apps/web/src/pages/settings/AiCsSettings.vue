@@ -63,8 +63,21 @@
 
             <div class="aics-row">
               <label>回复延时（秒）</label>
-              <input v-model.number="form.replyDelaySeconds" type="number" min="5" max="120" class="aics-input" />
-              <p class="aics-hint">建议保持 8 到 15 秒：系统会把这段时间内的连续咨询合并为一次回复。</p>
+              <input v-model.number="form.replyDelaySeconds" type="number" min="2" max="120" class="aics-input" />
+              <p class="aics-hint">低延迟客服建议 2 到 5 秒；系统会把这段时间内的连续咨询合并为一次回复。</p>
+            </div>
+
+            <div class="aics-row">
+              <label>客服推理强度</label>
+              <select v-model="form.reasoningEffort" class="aics-input">
+                <option value="none">极速（none，推荐客服使用）</option>
+                <option value="low">快速（low）</option>
+                <option value="medium">均衡（medium）</option>
+                <option value="high">深度（high）</option>
+                <option value="xhigh">超深度（xhigh）</option>
+                <option value="max">最大（max）</option>
+              </select>
+              <p class="aics-hint">仅影响 AI 客服调用，不修改 Codex 的全局推理强度；强度越高通常耗时越长。</p>
             </div>
 
             <div class="aics-row aics-row-toggle">
@@ -201,6 +214,28 @@
           <div class="aics-form">
             <div class="aics-row aics-row-toggle">
               <div>
+                <strong>防止双方 AI 无限对聊</strong>
+                <p>检测到对方重复自动模板，或短时间连续快速一问一答时，当前轮次静默熔断，不调用模型、不再外发。</p>
+              </div>
+              <button type="button" :class="['aics-switch', { on: form.botLoopProtection }]" :aria-pressed="form.botLoopProtection" aria-label="防止双方 AI 无限对聊" @click="form.botLoopProtection = !form.botLoopProtection">
+                <span class="aics-switch-knob" />
+              </button>
+            </div>
+
+            <div v-if="form.botLoopProtection" class="aics-row">
+              <label>连续对聊熔断轮数</label>
+              <input v-model.number="form.botLoopMaxTurns" type="number" min="2" max="10" class="aics-input" />
+              <p class="aics-hint">相同或高度相似的自动模板会立即熔断；内容持续变化时，达到此快速对聊轮数后熔断。建议保持 3。</p>
+            </div>
+
+            <div v-if="form.botLoopProtection" class="aics-row">
+              <label>对聊检测窗口（分钟）</label>
+              <input v-model.number="form.botLoopWindowMinutes" type="number" min="1" max="60" class="aics-input" />
+              <p class="aics-hint">只分析该时间窗口内最近的会话；窗口结束后，真人发送的新问题仍可正常触发客服。</p>
+            </div>
+
+            <div class="aics-row aics-row-toggle">
+              <div>
                 <strong>自动模式启用关键词门禁</strong>
                 <p>自动模式下命中下方任一关键词时 AI 停答；混合模式始终执行该门禁。</p>
               </div>
@@ -286,6 +321,10 @@
               <b :class="keywordGateEnabled ? 'green' : 'red'">{{ keywordGateEnabled ? '关键词门禁开启' : '关键词门禁关闭' }}</b>
             </div>
             <div class="aics-status-row">
+              <span>AI 对聊防护</span>
+              <b :class="form.botLoopProtection ? 'green' : 'red'">{{ form.botLoopProtection ? `${form.botLoopMaxTurns} 轮熔断` : '已关闭' }}</b>
+            </div>
+            <div class="aics-status-row">
               <span>自定义知识库</span>
               <b>{{ form.knowledgeBases.length }} 份</b>
             </div>
@@ -339,8 +378,12 @@ const form = reactive({
   persona: '专业客服',
   tone: 'friendly',
   language: 'zh-CN',
-  replyDelaySeconds: 8,
+  replyDelaySeconds: 3,
+  reasoningEffort: 'none',
   carryContext: true,
+  botLoopProtection: true,
+  botLoopMaxTurns: 3,
+  botLoopWindowMinutes: 10,
   pauseOnHumanIntervene: true,
   humanInterventionPauseMinutes: 30,
   systemPrompt: '',
@@ -506,6 +549,21 @@ function validatePolicyForm() {
   }
   if (!form.workHours24 && form.workStart === form.workEnd) {
     return '非全天工作时段的开始与结束时间不能相同'
+  }
+  const replyDelaySeconds = Number(form.replyDelaySeconds)
+  if (!Number.isInteger(replyDelaySeconds) || replyDelaySeconds < 2 || replyDelaySeconds > 120) {
+    return '回复延时必须是 2 到 120 之间的整数'
+  }
+  if (!['none', 'low', 'medium', 'high', 'xhigh', 'max'].includes(form.reasoningEffort)) {
+    return '请选择有效的客服推理强度'
+  }
+  const botLoopMaxTurns = Number(form.botLoopMaxTurns)
+  if (!Number.isInteger(botLoopMaxTurns) || botLoopMaxTurns < 2 || botLoopMaxTurns > 10) {
+    return '连续对聊熔断轮数必须是 2 到 10 之间的整数'
+  }
+  const botLoopWindowMinutes = Number(form.botLoopWindowMinutes)
+  if (!Number.isInteger(botLoopWindowMinutes) || botLoopWindowMinutes < 1 || botLoopWindowMinutes > 60) {
+    return '对聊检测窗口必须是 1 到 60 之间的整数'
   }
   const maxDailyReplies = Number(form.maxDailyReplies)
   if (!Number.isInteger(maxDailyReplies) || maxDailyReplies < 1 || maxDailyReplies > 10000) {

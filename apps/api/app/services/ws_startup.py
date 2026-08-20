@@ -193,13 +193,13 @@ async def _load_ai_reply_delay_seconds() -> float:
     try:
         async with async_session() as db:
             config = await load_business_setting(db, AI_CS_SETTING_KEY)
-        return float(config.get("replyDelaySeconds", 8))
+        return float(config.get("replyDelaySeconds", 3))
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "读取 AI 回复延迟失败，使用默认 8 秒 errorType=%s",
             type(exc).__name__,
         )
-        return 8.0
+        return 3.0
 
 
 async def _dispatch_ai_auto_reply_batch(

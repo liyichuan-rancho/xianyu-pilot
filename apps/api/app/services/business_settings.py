@@ -32,6 +32,7 @@ ALLOWED_BUSINESS_SETTING_CATEGORIES = {
     ACCOUNT_SCOPES_KEY,
 }
 _POLICY_TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+_AI_REASONING_EFFORTS = {"none", "low", "medium", "high", "xhigh", "max"}
 
 
 class BusinessSettingValidationError(ValueError):
@@ -57,10 +58,16 @@ def validate_ai_customer_service_config(
         raise BusinessSettingValidationError("接待模式无效")
     candidate["mode"] = mode
 
+    reasoning_effort = str(candidate.get("reasoningEffort") or "").strip().casefold()
+    if reasoning_effort not in _AI_REASONING_EFFORTS:
+        raise BusinessSettingValidationError("AI 客服推理强度无效")
+    candidate["reasoningEffort"] = reasoning_effort
+
     for field, label in (
         ("enabled", "AI 自动回复主开关"),
         ("workHours24", "全天时段开关"),
         ("pauseOnHumanIntervene", "人工干预暂停开关"),
+        ("botLoopProtection", "AI 对聊熔断开关"),
         ("safeMode", "关键词安全模式开关"),
     ):
         if not isinstance(candidate.get(field), bool):
@@ -76,6 +83,9 @@ def validate_ai_customer_service_config(
     candidate["workEnd"] = end
 
     for field, minimum, maximum, label in (
+        ("replyDelaySeconds", 2, 120, "回复延时"),
+        ("botLoopMaxTurns", 2, 10, "连续自动对聊熔断轮数"),
+        ("botLoopWindowMinutes", 1, 60, "自动对聊检测窗口"),
         ("maxDailyReplies", 1, 10_000, "每日最大回复数"),
         ("humanInterventionPauseMinutes", 1, 1_440, "人工接管暂停时长"),
     ):
@@ -127,8 +137,12 @@ def build_default_business_setting(setting_key: str) -> dict[str, Any]:
             "persona": "专业客服",
             "tone": "friendly",
             "language": "zh-CN",
-            "replyDelaySeconds": 8,
+            "replyDelaySeconds": 3,
+            "reasoningEffort": "none",
             "carryContext": True,
+            "botLoopProtection": True,
+            "botLoopMaxTurns": 3,
+            "botLoopWindowMinutes": 10,
             "pauseOnHumanIntervene": True,
             "humanInterventionPauseMinutes": 30,
             "systemPrompt": DEFAULT_AI_CS_SYSTEM_PROMPT,
@@ -308,6 +322,11 @@ def normalize_ai_customer_service_config(
     )
     normalized["pauseOnHumanIntervene"] = _canonical_legacy_bool(
         normalized.get("pauseOnHumanIntervene"),
+        fallback=True,
+        preserve_unknown=True,
+    )
+    normalized["botLoopProtection"] = _canonical_legacy_bool(
+        normalized.get("botLoopProtection"),
         fallback=True,
         preserve_unknown=True,
     )

@@ -17,6 +17,9 @@ CODEX_CLI_TRANSPORT = "codex-cli"
 CURSOR_CLI_TRANSPORT = "cursor-cli"
 LOCAL_CLI_TRANSPORTS = {CODEX_CLI_TRANSPORT, CURSOR_CLI_TRANSPORT}
 DEFAULT_CODEX_CLI_MODEL = "gpt-5.6-luna"
+SUPPORTED_REASONING_EFFORTS = frozenset(
+    {"none", "low", "medium", "high", "xhigh", "max"}
+)
 
 _DEFAULT_EXECUTABLES = {
     CODEX_CLI_TRANSPORT: "codex",
@@ -169,12 +172,13 @@ def build_cli_command(
     working_directory: str,
     output_file: str = "",
     cursor_prompt: str = "",
+    reasoning_effort: Any = "",
 ) -> list[str]:
     normalized_transport = normalize_model_transport(transport)
     if normalized_transport == CODEX_CLI_TRANSPORT:
         if not output_file:
             raise ValueError("Codex CLI 需要输出文件")
-        return [
+        command = [
             executable,
             "exec",
             "--ephemeral",
@@ -188,8 +192,16 @@ def build_cli_command(
             output_file,
             "--model",
             model,
-            "-",
         ]
+        normalized_effort = str(reasoning_effort or "").strip().casefold()
+        if normalized_effort:
+            if normalized_effort not in SUPPORTED_REASONING_EFFORTS:
+                raise ValueError("Codex CLI 推理强度无效")
+            command.extend(
+                ["-c", f'model_reasoning_effort="{normalized_effort}"']
+            )
+        command.append("-")
+        return command
     if normalized_transport == CURSOR_CLI_TRANSPORT:
         return _cursor_command_prefix(executable) + [
             "--print",
@@ -220,6 +232,7 @@ async def generate_text_with_local_cli(
     messages: list[dict[str, Any]],
     temperature: float,
     timeout_seconds: int,
+    reasoning_effort: Any = "",
 ) -> str:
     normalized_transport = normalize_model_transport(transport)
     executable = resolve_cli_executable(normalized_transport, cli_path)
@@ -237,6 +250,7 @@ async def generate_text_with_local_cli(
             working_directory=temp_dir,
             output_file=output_path,
             cursor_prompt=prompt,
+            reasoning_effort=reasoning_effort,
         )
         stdin_payload = prompt.encode("utf-8") if normalized_transport == CODEX_CLI_TRANSPORT else None
 

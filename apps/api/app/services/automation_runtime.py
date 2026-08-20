@@ -35,6 +35,7 @@ from .ai_auto_reply_attempt import (
     SqlAiAutoReplyAttemptStore,
 )
 from .ai_auto_reply_policy import evaluate_ai_auto_reply_policy
+from .ai_bot_loop_guard import evaluate_bot_loop_guard
 from .business_settings import (
     AI_CS_SETTING_KEY,
     load_business_setting,
@@ -327,6 +328,72 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
         )
         return
 
+    # A late WebSocket packet belongs to the turn already answered by the
+    # seller. Apply this shared gate before both keyword and model replies so
+    # neither automatic path can revive an old exchange.
+    latest_message_time = _coerce_message_time(
+        payload.get("latestMessageTime") or payload.get("messageTime")
+    )
+    if await _is_late_incoming_before_latest_outbound(
+        db,
+        account_id=account_id,
+        s_id=s_id,
+        incoming_message_time=latest_message_time,
+    ):
+        logger.warning(
+            "自动回复跳过迟到消息，避免重复外发 accountId=%d incomingTime=%s",
+            account_id,
+            latest_message_time,
+        )
+        return
+
+    # Load the shared customer-service policy before either keyword rules or
+    # model generation. Bot-loop protection must cover both automatic paths;
+    # otherwise a keyword rule can still keep two unattended shops talking.
+    ai_config = await load_business_setting(db, AI_CS_SETTING_KEY)
+    if ai_config.get("botLoopProtection", True):
+        try:
+            loop_decision = await evaluate_bot_loop_guard(
+                db,
+                account_id=account_id,
+                session_id=s_id,
+                window_minutes=int(ai_config.get("botLoopWindowMinutes", 10)),
+                max_rapid_turns=int(ai_config.get("botLoopMaxTurns", 3)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "AI 对聊熔断检查失败，按安全策略停止本轮自动回复 accountId=%d errorType=%s",
+                account_id,
+                type(exc).__name__,
+            )
+            return
+        else:
+            if loop_decision.blocked:
+                logger.warning(
+                    "AI 对聊熔断：本轮静默，不调用模型或发送消息 accountId=%d reason=%s rapidTurns=%d",
+                    account_id,
+                    loop_decision.reason,
+                    loop_decision.rapid_turns,
+                )
+                try:
+                    db.add(AutoReplyLog(
+                        account_id=account_id,
+                        trigger_message=content[:1000],
+                        hit_type="bot_loop_guard",
+                        status=0,
+                        fail_reason="检测到疑似双方自动客服连续对话",
+                        action="blocked",
+                        safety_reasons=loop_decision.reason,
+                    ))
+                    await db.flush()
+                except Exception as log_exc:  # noqa: BLE001
+                    logger.warning(
+                        "写入 AI 对聊熔断日志失败 accountId=%d errorType=%s",
+                        account_id,
+                        type(log_exc).__name__,
+                    )
+                return
+
     # Step 1.6: 关键词自动回复规则匹配（在 AI 自动回复之前）
     # 若匹配到关键词规则，直接发送规则配置的回复内容，跳过 AI 自动回复
     keyword_matched = await _try_keyword_auto_reply(
@@ -342,31 +409,9 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
     if keyword_matched:
         return
 
-    # Step 2: 加载 AI 客服配置（含 systemPrompt / 知识库 / 聊天规则 / 人设）
-    ai_config = await load_business_setting(db, AI_CS_SETTING_KEY)
+    # Step 2: AI 客服配置已在自动回复公共安全门禁前加载。
     if not ai_config.get("enabled"):
         logger.info("AI 自动回复跳过：AI 客服主开关未开启 accountId=%d", account_id)
-        return
-
-    # If a buyer packet was delivered late, its source timestamp can precede
-    # the seller's newest reply.  The old implementation treated it as a new
-    # turn and generated another external message.  Suppress it before the
-    # model call: it belongs to the already-handled turn and must never create
-    # another request or another buyer-facing reply.
-    latest_message_time = _coerce_message_time(
-        payload.get("latestMessageTime") or payload.get("messageTime")
-    )
-    if await _is_late_incoming_before_latest_outbound(
-        db,
-        account_id=account_id,
-        s_id=s_id,
-        incoming_message_time=latest_message_time,
-    ):
-        logger.warning(
-            "AI 自动回复跳过迟到消息，避免重复外发 accountId=%d incomingTime=%s",
-            account_id,
-            latest_message_time,
-        )
         return
 
     policy = await evaluate_ai_auto_reply_policy(
@@ -454,6 +499,7 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             user_prompt="",
             temperature=0.6,
             messages=messages,
+            reasoning_effort=str(ai_config.get("reasoningEffort") or "none"),
         )
         if not isinstance(result, dict) or not result.get("ok"):
             raise AiAutoReplyGenerationError("model_generation_failed")

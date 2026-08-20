@@ -81,12 +81,14 @@ def test_codex_command_uses_stdin_read_only_and_ephemeral_session(tmp_path):
         model="gpt-5",
         working_directory=str(tmp_path),
         output_file=str(output_file),
+        reasoning_effort="none",
     )
 
     assert command[-1] == "-"
     assert "--ephemeral" in command
     assert command[command.index("--sandbox") + 1] == "read-only"
     assert command[command.index("--model") + 1] == "gpt-5"
+    assert command[command.index("-c") + 1] == 'model_reasoning_effort="none"'
 
 
 def test_cursor_command_uses_ask_mode_and_configured_model(tmp_path):
@@ -121,12 +123,15 @@ async def test_generate_text_routes_local_cli_without_api_key(monkeypatch):
     async def fake_generate(**kwargs):
         assert kwargs["model"] == "gpt-5"
         assert kwargs["messages"][-1]["content"] == "你好"
+        assert kwargs["reasoning_effort"] == "none"
         return "你好，有什么可以帮你？"
 
     monkeypatch.setattr(ai_provider, "_resolve_ai_config", fake_resolve)
     monkeypatch.setattr(ai_provider, "generate_text_with_local_cli", fake_generate)
 
-    result = await ai_provider.generate_text("chat", "你是客服", "你好")
+    result = await ai_provider.generate_text(
+        "chat", "你是客服", "你好", reasoning_effort="none"
+    )
 
     assert result["ok"] is True
     assert result["provider"] == CODEX_CLI_TRANSPORT

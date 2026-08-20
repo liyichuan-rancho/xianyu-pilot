@@ -151,6 +151,7 @@ async def test_ai_customer_service(
             system_prompt=system_prompt,
             user_prompt=user_message,
             temperature=0.6,
+            reasoning_effort=str(config.get("reasoningEffort") or "none"),
         )
     except Exception as exc:  # noqa: BLE001
         # Provider errors can contain URLs, request bodies, or credentials.

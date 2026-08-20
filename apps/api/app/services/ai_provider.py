@@ -15,6 +15,7 @@ from app.core.upload_security import (
 from app.services.local_ai_cli import (
     API_TRANSPORT,
     LocalAICLIError,
+    SUPPORTED_REASONING_EFFORTS,
     generate_text_with_local_cli,
     is_local_cli_transport,
     normalize_model_transport,
@@ -379,6 +380,7 @@ async def generate_text(
     user_prompt: str,
     temperature: float = 0.7,
     messages: list[Dict[str, Any]] | None = None,
+    reasoning_effort: str | None = None,
 ) -> Dict[str, Any]:
     request_id = str(uuid.uuid4())
     cfg = await _resolve_ai_config()
@@ -412,6 +414,13 @@ async def generate_text(
         "temperature": temperature,
         "messages": messages,
     }
+    normalized_reasoning_effort = str(reasoning_effort or "").strip().casefold()
+    if (
+        normalized_reasoning_effort
+        and normalized_reasoning_effort not in SUPPORTED_REASONING_EFFORTS
+    ):
+        result.update({"ok": False, "error": "AI 推理强度配置无效"})
+        return result
 
     if transport == OLLAMA_TRANSPORT:
         try:
@@ -449,6 +458,7 @@ async def generate_text(
                 messages=messages,
                 temperature=temperature,
                 timeout_seconds=int(cfg.get("request_timeout") or 30),
+                reasoning_effort=normalized_reasoning_effort,
             )
             result.update({"ok": True, "content": content, "usage": {}})
             return result
@@ -464,6 +474,11 @@ async def generate_text(
             )
             result.update({"ok": False, "error": "本机 AI CLI 调用失败"})
             return result
+
+    # OpenAI GPT-5 compatible endpoints accept reasoning_effort directly.
+    # Do not send the extension to unrelated OpenAI-compatible providers.
+    if normalized_reasoning_effort and str(cfg["model"]).casefold().startswith("gpt-5"):
+        payload["reasoning_effort"] = normalized_reasoning_effort
 
     try:
         response = await request_public_https(
